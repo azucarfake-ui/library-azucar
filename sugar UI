@@ -1,0 +1,830 @@
+--[[
+	PanelUI
+	--------
+	Librería de UI (solo interfaz, SIN lógica interna) inspirada en el diseño
+	mostrado: tema oscuro, acentos rojos, sidebar con secciones, tarjetas de
+	estadísticas y accesos rápidos.
+
+	Uso básico:
+
+		local PanelUI = require(script.PanelUI)
+
+		local Window = PanelUI:CreateWindow({
+			Title       = "Top 1 Col",
+			Badge       = "ADMIN",
+			ServerName  = "Servidor en línea",
+			ServerOn    = true,
+		})
+
+		local Principal = Window:CreateTab({ Name = "Principal", Icon = "P", Section = "GENERAL" })
+		local Teleport   = Window:CreateTab({ Name = "Teleport",  Icon = "T", Section = "ACCIONES" })
+		local Combate    = Window:CreateTab({ Name = "Combate",   Icon = "C", Section = "ACCIONES" })
+
+		Principal:CreateStat({ Value = "24", Label = "jugadores en línea" })
+		Principal:CreateStat({ Value = "3",  Label = "reportes sin revisar" })
+		Principal:CreateStat({ Value = "98%",Label = "estabilidad de servidor" })
+
+		local quick = Principal:CreateQuickAccess({ Icon = "T", Title = "Teleport" })
+		quick.OnClick = function() end -- <- aquí conectas tu propia lógica
+
+	Todo lo que ves aquí es SOLO interfaz: la construcción visual (Instance.new),
+	el layout y las animaciones básicas de hover/click. No incluye ningún
+	comportamiento de juego (teletransportar, combate, etc.) — eso lo agregas
+	tú, conectándolo a los eventos `.OnClick`, `.OnToggle`, etc. que expone
+	cada elemento.
+]]
+
+local TweenService = game:GetService("TweenService")
+local Players = game:GetService("Players")
+
+local PanelUI = {}
+PanelUI.__index = PanelUI
+
+-- ============================================================
+-- 	PROPIEDADES DE LIBRERÍA
+-- ============================================================
+PanelUI.Version   = "1.0.0"
+PanelUI.Windows   = {}   -- todas las ventanas creadas, por si necesitas iterarlas
+PanelUI.Flags     = {}   -- opcional: aquí puedes ir guardando el estado de toggles/etc.
+PanelUI.Theme     = nil  -- se asigna abajo, expuesto para poder leer/cambiar colores
+
+-- Encuentra dónde parentear el ScreenGui: primero intenta CoreGui (protegido,
+-- típico en librerías con executor), si no existe cae a PlayerGui (Roblox Studio /
+-- juego normal).
+local function getGuiParent()
+	local ok, coreGui = pcall(function()
+		return game:GetService("CoreGui")
+	end)
+
+	if ok and coreGui then
+		-- gethui()/protect_gui existen en la mayoría de executors; si no existen,
+		-- simplemente usamos CoreGui directo o hacemos fallback a PlayerGui.
+		local getHui = rawget(_G, "gethui")
+		if typeof(getHui) == "function" then
+			local success, hui = pcall(getHui)
+			if success and hui then
+				return hui
+			end
+		end
+	end
+
+	local player = Players.LocalPlayer or Players.PlayerAdded:Wait()
+	local playerGui = player:WaitForChild("PlayerGui")
+	return playerGui
+end
+
+-- ============================================================
+-- 	PALETA / TEMA
+-- ============================================================
+local Theme = {
+	Background      = Color3.fromRGB(18, 16, 20),
+	Sidebar         = Color3.fromRGB(22, 20, 23),
+	Panel           = Color3.fromRGB(27, 24, 28),
+	PanelAlt        = Color3.fromRGB(32, 28, 33),
+	Accent          = Color3.fromRGB(196, 34, 47),   -- rojo principal
+	AccentDim       = Color3.fromRGB(120, 30, 38),
+	Text            = Color3.fromRGB(240, 240, 242),
+	TextDim         = Color3.fromRGB(150, 147, 153),
+	TextFaint       = Color3.fromRGB(105, 102, 110),
+	Online          = Color3.fromRGB(63, 201, 141),
+	Stroke          = Color3.fromRGB(40, 37, 42),
+	Font            = Enum.Font.GothamMedium,
+	FontBold        = Enum.Font.GothamBold,
+	FontSemibold    = Enum.Font.GothamSemibold,
+}
+
+PanelUI.Theme = Theme -- expuesto como propiedad pública de la librería
+
+-- ============================================================
+-- 	HELPERS
+-- ============================================================
+local function new(class, props, children)
+	local inst = Instance.new(class)
+	for prop, value in pairs(props or {}) do
+		inst[prop] = value
+	end
+	for _, child in ipairs(children or {}) do
+		child.Parent = inst
+	end
+	return inst
+end
+
+local function corner(radius)
+	return new("UICorner", { CornerRadius = UDim.new(0, radius or 10) })
+end
+
+local function stroke(color, thickness)
+	return new("UIStroke", {
+		Color = color or Theme.Stroke,
+		Thickness = thickness or 1,
+	})
+end
+
+local function pad(all, top, right, bottom, left)
+	return new("UIPadding", {
+		PaddingTop    = UDim.new(0, top or all or 0),
+		PaddingRight  = UDim.new(0, right or all or 0),
+		PaddingBottom = UDim.new(0, bottom or all or 0),
+		PaddingLeft   = UDim.new(0, left or all or 0),
+	})
+end
+
+local function hoverTint(guiObject, baseColor, hoverColor)
+	guiObject.MouseEnter:Connect(function()
+		TweenService:Create(guiObject, TweenInfo.new(0.12), { BackgroundColor3 = hoverColor }):Play()
+	end)
+	guiObject.MouseLeave:Connect(function()
+		TweenService:Create(guiObject, TweenInfo.new(0.12), { BackgroundColor3 = baseColor }):Play()
+	end)
+end
+
+-- ============================================================
+-- 	CREATE WINDOW
+-- ============================================================
+function PanelUI:CreateWindow(config)
+	config = config or {}
+
+	local ScreenGui = new("ScreenGui", {
+		Name = config.Title or "PanelUI",
+		ResetOnSpawn = false,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+		DisplayOrder = 999,
+		IgnoreGuiInset = true,
+	})
+
+	-- Blindaje opcional contra detección (solo si el entorno lo soporta; en
+	-- Roblox Studio / juego normal simplemente no hace nada).
+	local protectGui = rawget(_G, "protectgui") or rawget(_G, "protect_gui")
+	if typeof(protectGui) == "function" then
+		pcall(protectGui, ScreenGui)
+	end
+
+	ScreenGui.Parent = getGuiParent()
+
+	-- Contenedor raíz
+	local Root = new("Frame", {
+		Name = "Root",
+		Size = UDim2.new(0, 900, 0, 560),
+		Position = UDim2.new(0.5, -450, 0.5, -280),
+		BackgroundColor3 = Theme.Background,
+		ClipsDescendants = true,
+		Parent = ScreenGui,
+	}, { corner(14), stroke(Theme.Stroke, 1) })
+
+	-- ---------------- Barra superior ----------------
+	local TopBar = new("Frame", {
+		Name = "TopBar",
+		Size = UDim2.new(1, 0, 0, 56),
+		BackgroundColor3 = Theme.Sidebar,
+		Parent = Root,
+	}, { stroke(Theme.Stroke, 1) })
+
+	local Badge1 = new("TextLabel", {
+		Text = "1",
+		Font = Theme.FontBold,
+		TextSize = 16,
+		TextColor3 = Theme.Text,
+		BackgroundColor3 = Theme.Accent,
+		Size = UDim2.new(0, 32, 0, 32),
+		Position = UDim2.new(0, 16, 0.5, -16),
+		Parent = TopBar,
+	}, { corner(9) })
+
+	local TitleLabel = new("TextLabel", {
+		Text = config.Title or "Panel",
+		Font = Theme.FontBold,
+		TextSize = 17,
+		TextColor3 = Theme.Text,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		BackgroundTransparency = 1,
+		Size = UDim2.new(0, 160, 0, 20),
+		Position = UDim2.new(0, 60, 0.5, -10),
+		Parent = TopBar,
+	})
+
+	local AdminBadge
+	if config.Badge then
+		AdminBadge = new("TextLabel", {
+			Text = config.Badge,
+			Font = Theme.FontBold,
+			TextSize = 11,
+			TextColor3 = Theme.Text,
+			BackgroundColor3 = Theme.Accent,
+			Size = UDim2.new(0, 54, 0, 22),
+			Position = UDim2.new(0, 220, 0.5, -11),
+			Parent = TopBar,
+		}, { corner(6) })
+	end
+
+	local ServerPill = new("Frame", {
+		Size = UDim2.new(0, 190, 0, 32),
+		Position = UDim2.new(0, 300, 0.5, -16),
+		BackgroundColor3 = Theme.PanelAlt,
+		Parent = TopBar,
+	}, { corner(16), stroke(Theme.Stroke, 1) })
+
+	new("Frame", {
+		Size = UDim2.new(0, 8, 0, 8),
+		Position = UDim2.new(0, 14, 0.5, -4),
+		BackgroundColor3 = config.ServerOn ~= false and Theme.Online or Theme.TextFaint,
+		Parent = ServerPill,
+	}, { corner(4) })
+
+	new("TextLabel", {
+		Text = config.ServerName or "Servidor en línea",
+		Font = Theme.Font,
+		TextSize = 13,
+		TextColor3 = Theme.TextDim,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, -32, 1, 0),
+		Position = UDim2.new(0, 28, 0, 0),
+		Parent = ServerPill,
+	})
+
+	-- Botones de control (minimizar / cerrar) — solo visuales
+	local MinimizeBtn = new("TextButton", {
+		Text = "—",
+		Font = Theme.FontBold,
+		TextSize = 14,
+		TextColor3 = Theme.Text,
+		BackgroundColor3 = Theme.PanelAlt,
+		Size = UDim2.new(0, 32, 0, 32),
+		Position = UDim2.new(1, -80, 0.5, -16),
+		Parent = TopBar,
+	}, { corner(8) })
+
+	local CloseBtn = new("TextButton", {
+		Text = "✕",
+		Font = Theme.FontBold,
+		TextSize = 14,
+		TextColor3 = Theme.Text,
+		BackgroundColor3 = Theme.PanelAlt,
+		Size = UDim2.new(0, 32, 0, 32),
+		Position = UDim2.new(1, -40, 0.5, -16),
+		Parent = TopBar,
+	}, { corner(8) })
+
+	hoverTint(MinimizeBtn, Theme.PanelAlt, Theme.Panel)
+	hoverTint(CloseBtn, Theme.PanelAlt, Theme.Accent)
+
+	-- ---------------- Sidebar ----------------
+	local Sidebar = new("Frame", {
+		Name = "Sidebar",
+		Size = UDim2.new(0, 240, 1, -56),
+		Position = UDim2.new(0, 0, 0, 56),
+		BackgroundColor3 = Theme.Sidebar,
+		Parent = Root,
+	}, { stroke(Theme.Stroke, 1) })
+
+	local SearchBox = new("TextBox", {
+		PlaceholderText = "Buscar pestaña...",
+		Text = "",
+		Font = Theme.Font,
+		TextSize = 13,
+		TextColor3 = Theme.Text,
+		PlaceholderColor3 = Theme.TextFaint,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		ClearTextOnFocus = false,
+		BackgroundColor3 = Theme.PanelAlt,
+		Size = UDim2.new(1, -32, 0, 36),
+		Position = UDim2.new(0, 16, 0, 16),
+		Parent = Sidebar,
+	}, { corner(8), pad(0, 0, 0, 0, 34), stroke(Theme.Stroke, 1) })
+
+	new("TextLabel", {
+		Text = "🔍",
+		Font = Theme.Font,
+		TextSize = 13,
+		TextColor3 = Theme.TextFaint,
+		BackgroundTransparency = 1,
+		Size = UDim2.new(0, 20, 1, 0),
+		Position = UDim2.new(0, 10, 0, 0),
+		Parent = SearchBox,
+	})
+
+	local SidebarList = new("ScrollingFrame", {
+		Name = "SidebarList",
+		Size = UDim2.new(1, 0, 1, -142),
+		Position = UDim2.new(0, 0, 0, 66),
+		BackgroundTransparency = 1,
+		ScrollBarThickness = 3,
+		ScrollBarImageColor3 = Theme.Stroke,
+		CanvasSize = UDim2.new(0, 0, 0, 0),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		Parent = Sidebar,
+	}, {
+		new("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }),
+		pad(0, 4, 16, 16, 16),
+	})
+
+	-- ---------------- Tarjeta de perfil (parte inferior del sidebar) ----------------
+	local ProfileDivider = new("Frame", {
+		Size = UDim2.new(1, -32, 0, 1),
+		Position = UDim2.new(0, 16, 1, -78),
+		BackgroundColor3 = Theme.Stroke,
+		Parent = Sidebar,
+	})
+
+	local ProfileRow = new("Frame", {
+		Name = "ProfileRow",
+		Size = UDim2.new(1, -32, 0, 46),
+		Position = UDim2.new(0, 16, 1, -60),
+		BackgroundTransparency = 1,
+		Parent = Sidebar,
+	})
+
+	-- ---------------- Área de contenido ----------------
+	local Content = new("Frame", {
+		Name = "Content",
+		Size = UDim2.new(1, -240, 1, -56),
+		Position = UDim2.new(0, 240, 0, 56),
+		BackgroundColor3 = Theme.Background,
+		Parent = Root,
+	})
+
+	local ContentScroll = new("ScrollingFrame", {
+		Size = UDim2.new(1, 0, 1, 0),
+		BackgroundTransparency = 1,
+		ScrollBarThickness = 3,
+		ScrollBarImageColor3 = Theme.Stroke,
+		CanvasSize = UDim2.new(0, 0, 0, 0),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		Parent = Content,
+	}, {
+		new("UIListLayout", { Padding = UDim.new(0, 20), SortOrder = Enum.SortOrder.LayoutOrder }),
+		pad(0, 28, 32, 28, 32),
+	})
+
+	-- ============================================================
+	local Window = setmetatable({
+		ScreenGui = ScreenGui,
+		Root = Root,
+		Sidebar = Sidebar,
+		SidebarList = SidebarList,
+		ProfileRow = ProfileRow,
+		Content = Content,
+		ContentScroll = ContentScroll,
+		_tabs = {},
+		_sections = {},
+	}, PanelUI)
+
+	MinimizeBtn.MouseButton1Click:Connect(function()
+		Window:Hide()
+		if Window.OnMinimize then Window.OnMinimize() end
+	end)
+	CloseBtn.MouseButton1Click:Connect(function()
+		Window:Destroy()
+		if Window.OnClose then Window.OnClose() end
+	end)
+
+	table.insert(PanelUI.Windows, Window)
+	return Window
+end
+
+-- ------------------------------------------------------------
+-- 	Métodos de ventana (propiedades estándar de una librería UI)
+-- ------------------------------------------------------------
+
+-- Muestra la ventana (por si estaba oculta con :Hide())
+function PanelUI:Show()
+	self.Root.Visible = true
+end
+
+-- Oculta la ventana sin destruirla (equivalente a "minimizar")
+function PanelUI:Hide()
+	self.Root.Visible = false
+end
+
+-- Alterna entre mostrar/ocultar
+function PanelUI:Toggle()
+	self.Root.Visible = not self.Root.Visible
+end
+
+-- Destruye la ventana y limpia sus referencias
+function PanelUI:Destroy()
+	if self.ScreenGui then
+		self.ScreenGui:Destroy()
+	end
+	for i, w in ipairs(PanelUI.Windows) do
+		if w == self then
+			table.remove(PanelUI.Windows, i)
+			break
+		end
+	end
+end
+
+-- ============================================================
+-- 	SECCIONES DEL SIDEBAR (GENERAL / ACCIONES / etc.)
+-- ============================================================
+function PanelUI:_getSection(name)
+	if self._sections[name] then
+		return self._sections[name]
+	end
+
+	new("TextLabel", {
+		Text = name,
+		Font = Theme.FontSemibold,
+		TextSize = 11,
+		TextColor3 = Theme.TextFaint,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 0, 18),
+		LayoutOrder = #self._sections * 1000,
+		Parent = self.SidebarList,
+	})
+
+	self._sections[name] = true
+	return true
+end
+
+-- Línea divisoria dentro del sidebar (por ejemplo entre "Combate" y "Customs")
+function PanelUI:CreateDivider()
+	new("Frame", {
+		Size = UDim2.new(1, 0, 0, 1),
+		BackgroundColor3 = Theme.Stroke,
+		LayoutOrder = 900 + (#self._sections * 1000),
+		Parent = self.SidebarList,
+	})
+end
+
+-- ============================================================
+-- 	CREATE TAB
+-- ============================================================
+function PanelUI:CreateTab(config)
+	config = config or {}
+	self:_getSection(config.Section or "GENERAL")
+
+	local isFirst = #self._tabs == 0
+
+	local TabButton = new("TextButton", {
+		Name = config.Name,
+		Text = "",
+		AutoButtonColor = false,
+		BackgroundColor3 = isFirst and Theme.Accent or Theme.Sidebar,
+		Size = UDim2.new(1, 0, 0, 44),
+		Parent = self.SidebarList,
+	}, { corner(9) })
+
+	new("TextLabel", {
+		Text = config.Icon or "•",
+		Font = Theme.FontBold,
+		TextSize = 13,
+		TextColor3 = Theme.Text,
+		BackgroundColor3 = isFirst and Color3.fromRGB(255,255,255) or Theme.PanelAlt,
+		BackgroundTransparency = isFirst and 0.85 or 0,
+		Size = UDim2.new(0, 26, 0, 26),
+		Position = UDim2.new(0, 9, 0.5, -13),
+		Parent = TabButton,
+	}, { corner(7) })
+
+	new("TextLabel", {
+		Text = config.Name or "Tab",
+		Font = Theme.FontSemibold,
+		TextSize = 14,
+		TextColor3 = Theme.Text,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, -55, 1, 0),
+		Position = UDim2.new(0, 45, 0, 0),
+		Parent = TabButton,
+	})
+
+	if not isFirst then
+		hoverTint(TabButton, Theme.Sidebar, Theme.PanelAlt)
+	end
+
+	-- Página de contenido asociada a la pestaña
+	local Page = new("Frame", {
+		Name = config.Name .. "Page",
+		Size = UDim2.new(1, 0, 0, 0),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		BackgroundTransparency = 1,
+		Visible = isFirst,
+		LayoutOrder = 1,
+		Parent = self.ContentScroll,
+	}, {
+		new("UIListLayout", { Padding = UDim.new(0, 18), SortOrder = Enum.SortOrder.LayoutOrder }),
+	})
+
+	local HeaderTitle = new("TextLabel", {
+		Text = config.Name,
+		Font = Theme.FontBold,
+		TextSize = 26,
+		TextColor3 = Theme.Text,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 0, 32),
+		LayoutOrder = 0,
+		Parent = Page,
+	})
+
+	local HeaderSub = new("TextLabel", {
+		Text = config.Description or "",
+		Font = Theme.Font,
+		TextSize = 14,
+		TextColor3 = Theme.TextDim,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 0, 20),
+		LayoutOrder = 1,
+		Visible = config.Description ~= nil,
+		Parent = Page,
+	})
+
+	local Tab = setmetatable({
+		Window = self,
+		Button = TabButton,
+		Page = Page,
+		_rowCount = 2,
+	}, PanelUI)
+
+	TabButton.MouseButton1Click:Connect(function()
+		for _, t in ipairs(self._tabs) do
+			t.Page.Visible = false
+			t.Button.BackgroundColor3 = Theme.Sidebar
+		end
+		Page.Visible = true
+		TabButton.BackgroundColor3 = Theme.Accent
+		if Tab.OnSelect then Tab.OnSelect() end
+	end)
+
+	table.insert(self._tabs, Tab)
+	return Tab
+end
+
+-- ============================================================
+-- 	PERFIL DE USUARIO (parte inferior del sidebar)
+-- ============================================================
+-- config.Name, config.Role, config.Initials, config.Online (bool, color del punto)
+function PanelUI:CreateProfile(config)
+	config = config or {}
+	local Row = self.ProfileRow
+	if not Row then return end
+
+	-- limpiar contenido previo si se llama más de una vez
+	for _, child in ipairs(Row:GetChildren()) do
+		child:Destroy()
+	end
+
+	new("TextLabel", {
+		Text = config.Initials or "?",
+		Font = Theme.FontBold,
+		TextSize = 13,
+		TextColor3 = Theme.Text,
+		BackgroundColor3 = Theme.Accent,
+		Size = UDim2.new(0, 34, 0, 34),
+		Position = UDim2.new(0, 0, 0.5, -17),
+		Parent = Row,
+	}, { corner(17) })
+
+	new("TextLabel", {
+		Text = config.Name or "Usuario",
+		Font = Theme.FontSemibold,
+		TextSize = 14,
+		TextColor3 = Theme.Text,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, -46, 0, 18),
+		Position = UDim2.new(0, 46, 0, 2),
+		Parent = Row,
+	})
+
+	local RoleRow = new("Frame", {
+		Size = UDim2.new(1, -46, 0, 16),
+		Position = UDim2.new(0, 46, 0, 22),
+		BackgroundTransparency = 1,
+		Parent = Row,
+	})
+
+	new("Frame", {
+		Size = UDim2.new(0, 7, 0, 7),
+		Position = UDim2.new(0, 0, 0.5, -3.5),
+		BackgroundColor3 = config.Online ~= false and Theme.Online or Theme.TextFaint,
+		Parent = RoleRow,
+	}, { corner(4) })
+
+	new("TextLabel", {
+		Text = config.Role or "",
+		Font = Theme.Font,
+		TextSize = 12,
+		TextColor3 = Theme.TextDim,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, -14, 1, 0),
+		Position = UDim2.new(0, 14, 0, 0),
+		Parent = RoleRow,
+	})
+end
+
+-- ============================================================
+-- 	ELEMENTOS DE CONTENIDO (solo visuales)
+-- ============================================================
+
+-- Fila de tarjetas de estadísticas (24 / 3 / 98% ...)
+function PanelUI:CreateStatRow()
+	local Row = new("Frame", {
+		Size = UDim2.new(1, 0, 0, 60),
+		BackgroundTransparency = 1,
+		LayoutOrder = self._rowCount,
+		Parent = self.Page,
+	}, {
+		new("UIListLayout", {
+			FillDirection = Enum.FillDirection.Horizontal,
+			Padding = UDim.new(0, 40),
+			SortOrder = Enum.SortOrder.LayoutOrder,
+		}),
+	})
+	self._rowCount += 1
+
+	local StatRow = setmetatable({ Row = Row, _count = 0 }, PanelUI)
+	return StatRow
+end
+
+-- Tarjeta individual de estadística ("24 / jugadores en línea")
+function PanelUI:CreateStat(config)
+	config = config or {}
+	local container = self.Row or self.Page
+
+	local Stat = new("Frame", {
+		Size = UDim2.new(0, 150, 1, 0),
+		BackgroundTransparency = 1,
+		LayoutOrder = self._count or 0,
+		Parent = container,
+	})
+
+	new("TextLabel", {
+		Text = config.Value or "0",
+		Font = Theme.FontBold,
+		TextSize = 30,
+		TextColor3 = Theme.Accent,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 0, 36),
+		Parent = Stat,
+	})
+
+	new("TextLabel", {
+		Text = config.Label or "",
+		Font = Theme.Font,
+		TextSize = 13,
+		TextColor3 = Theme.TextDim,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextWrapped = true,
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 0, 32),
+		Position = UDim2.new(0, 0, 0, 34),
+		Parent = Stat,
+	})
+
+	if self._count ~= nil then
+		self._count += 1
+	end
+
+	return Stat
+end
+
+-- Encabezado de sección ("ACCESOS RÁPIDOS")
+function PanelUI:CreateSectionLabel(text)
+	new("TextLabel", {
+		Text = text,
+		Font = Theme.FontSemibold,
+		TextSize = 12,
+		TextColor3 = Theme.TextFaint,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 0, 18),
+		LayoutOrder = self._rowCount,
+		Parent = self.Page,
+	})
+	self._rowCount += 1
+end
+
+-- Tarjeta de "Acceso rápido" (icono + título) — el click es un evento vacío
+function PanelUI:CreateQuickAccess(config)
+	config = config or {}
+
+	local Card = new("Frame", {
+		Size = UDim2.new(1, 0, 0, 84),
+		BackgroundColor3 = Theme.Panel,
+		LayoutOrder = self._rowCount,
+		Parent = self.Page,
+	}, { corner(12), stroke(Theme.Stroke, 1), pad(16) })
+	self._rowCount += 1
+
+	new("TextLabel", {
+		Text = config.Icon or "•",
+		Font = Theme.FontBold,
+		TextSize = 15,
+		TextColor3 = Theme.Text,
+		BackgroundColor3 = Theme.PanelAlt,
+		Size = UDim2.new(0, 34, 0, 34),
+		Parent = Card,
+	}, { corner(9) })
+
+	new("TextLabel", {
+		Text = config.Title or "Acceso",
+		Font = Theme.FontSemibold,
+		TextSize = 16,
+		TextColor3 = Theme.Text,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, -50, 0, 20),
+		Position = UDim2.new(0, 50, 0, 6),
+		Parent = Card,
+	})
+
+	local ClickOverlay = new("TextButton", {
+		Text = "",
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 1, 0),
+		Parent = Card,
+	})
+
+	local QuickAccess = setmetatable({ Card = Card }, PanelUI)
+	ClickOverlay.MouseButton1Click:Connect(function()
+		if QuickAccess.OnClick then QuickAccess.OnClick() end
+	end)
+	hoverTint(Card, Theme.Panel, Theme.PanelAlt)
+
+	return QuickAccess
+end
+
+-- Botón simple con texto — el evento OnClick queda vacío para tu lógica
+function PanelUI:CreateButton(config)
+	config = config or {}
+
+	local Btn = new("TextButton", {
+		Text = config.Text or "Botón",
+		Font = Theme.FontSemibold,
+		TextSize = 14,
+		TextColor3 = Theme.Text,
+		AutoButtonColor = false,
+		BackgroundColor3 = Theme.Accent,
+		Size = UDim2.new(0, 160, 0, 40),
+		LayoutOrder = self._rowCount,
+		Parent = self.Page,
+	}, { corner(9) })
+	self._rowCount += 1
+
+	local Button = setmetatable({ Instance = Btn }, PanelUI)
+	Btn.MouseButton1Click:Connect(function()
+		if Button.OnClick then Button.OnClick() end
+	end)
+	hoverTint(Btn, Theme.Accent, Theme.AccentDim)
+
+	return Button
+end
+
+-- Toggle (interruptor) — el evento OnToggle(state) queda vacío
+function PanelUI:CreateToggle(config)
+	config = config or {}
+	local state = config.Default or false
+
+	local Row = new("Frame", {
+		Size = UDim2.new(1, 0, 0, 44),
+		BackgroundColor3 = Theme.Panel,
+		LayoutOrder = self._rowCount,
+		Parent = self.Page,
+	}, { corner(10), stroke(Theme.Stroke, 1), pad(0, 0, 16, 0, 16) })
+	self._rowCount += 1
+
+	new("TextLabel", {
+		Text = config.Text or "Opción",
+		Font = Theme.Font,
+		TextSize = 14,
+		TextColor3 = Theme.Text,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, -60, 1, 0),
+		Parent = Row,
+	})
+
+	local Track = new("Frame", {
+		Size = UDim2.new(0, 42, 0, 22),
+		Position = UDim2.new(1, -42, 0.5, -11),
+		BackgroundColor3 = state and Theme.Accent or Theme.PanelAlt,
+		Parent = Row,
+	}, { corner(11), stroke(Theme.Stroke, 1) })
+
+	local Knob = new("Frame", {
+		Size = UDim2.new(0, 16, 0, 16),
+		Position = state and UDim2.new(1, -19, 0.5, -8) or UDim2.new(0, 3, 0.5, -8),
+		BackgroundColor3 = Theme.Text,
+		Parent = Track,
+	}, { corner(8) })
+
+	local ClickOverlay = new("TextButton", { Text = "", BackgroundTransparency = 1, Size = UDim2.new(1,0,1,0), Parent = Row })
+
+	local Toggle = setmetatable({ Track = Track, Knob = Knob }, PanelUI)
+	ClickOverlay.MouseButton1Click:Connect(function()
+		state = not state
+		TweenService:Create(Track, TweenInfo.new(0.15), { BackgroundColor3 = state and Theme.Accent or Theme.PanelAlt }):Play()
+		TweenService:Create(Knob, TweenInfo.new(0.15), { Position = state and UDim2.new(1, -19, 0.5, -8) or UDim2.new(0, 3, 0.5, -8) }):Play()
+		if Toggle.OnToggle then Toggle.OnToggle(state) end
+	end)
+
+	return Toggle
+end
+
+return PanelUI
