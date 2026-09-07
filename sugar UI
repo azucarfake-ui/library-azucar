@@ -30,8 +30,18 @@
 	Todo lo que ves aquí es SOLO interfaz: la construcción visual (Instance.new),
 	el layout y las animaciones básicas de hover/click. No incluye ningún
 	comportamiento de juego (teletransportar, combate, etc.) — eso lo agregas
-	tú, conectándolo a los eventos `.OnClick`, `.OnToggle`, etc. que expone
-	cada elemento.
+	tú, conectándolo a los eventos `.OnClick`, `.OnToggle`, `.OnChange`,
+	`.OnSelect`, etc. que expone cada elemento.
+
+	CÓMO FUNCIONA LA EJECUCIÓN DE TU LÓGICA:
+	Cada elemento interactivo (botón, toggle, slider, tab, acceso rápido)
+	guarda tu función en una propiedad (Elemento.OnClick = function() ... end)
+	y, cuando ocurre el evento real (click, arrastre, etc.), la librería la
+	llama a través de `safeCall`. `safeCall` usa `pcall` internamente, así que:
+	  - Tu función puede contener CUALQUIER lógica (teleport, combate, kick,
+	    cambiar stats, etc.) — la librería no la restringe de ninguna forma.
+	  - Si tu función lanza un error, ese error se reporta en el output con
+	    `warn(...)` pero NO rompe ni congela el resto de la interfaz.
 ]]
 
 local TweenService = game:GetService("TweenService")
@@ -44,7 +54,7 @@ PanelUI.__index = PanelUI
 -- ============================================================
 -- 	PROPIEDADES DE LIBRERÍA
 -- ============================================================
-PanelUI.Version   = "1.0.0"
+PanelUI.Version   = "1.1.0"
 PanelUI.Windows   = {}   -- todas las ventanas creadas, por si necesitas iterarlas
 PanelUI.Flags     = {}   -- opcional: aquí puedes ir guardando el estado de toggles/etc.
 PanelUI.Theme     = nil  -- se asigna abajo, expuesto para poder leer/cambiar colores
@@ -143,6 +153,19 @@ local function hoverTint(guiObject, baseColor, hoverColor)
 	end)
 end
 
+-- Pequeño "press" visual: encoge un poco el botón al hacer click, para dar
+-- sensación de feedback físico (solo estético).
+local function pressFeedback(guiObject)
+	guiObject.MouseButton1Down:Connect(function()
+		TweenService:Create(guiObject, TweenInfo.new(0.06), { Size = guiObject.Size - UDim2.new(0, 4, 0, 2) }):Play()
+	end)
+	local function restore()
+		TweenService:Create(guiObject, TweenInfo.new(0.08), { Size = guiObject.Size + UDim2.new(0, 4, 0, 2) }):Play()
+	end
+	guiObject.MouseButton1Up:Connect(restore)
+	guiObject.MouseLeave:Connect(restore)
+end
+
 -- Degradado sutil rojo→rojo oscuro, para darle profundidad a botones y acentos
 local function accentGradient(rotation)
 	return new("UIGradient", {
@@ -152,8 +175,10 @@ local function accentGradient(rotation)
 end
 
 -- Ejecuta cualquier lógica que el usuario haya conectado (.OnClick, .OnToggle,
--- .OnChange, etc.) de forma segura: si esa lógica lanza un error, no rompe la
--- interfaz — solo se reporta en el output, y la UI sigue funcionando normal.
+-- .OnChange, .OnSelect, etc.) de forma segura: si esa lógica lanza un error,
+-- no rompe la interfaz — solo se reporta en el output, y la UI sigue
+-- funcionando normal. Esta es la función que le permite a la librería
+-- ejecutar CUALQUIER lógica externa que el usuario conecte.
 local function safeCall(fn, ...)
 	if typeof(fn) ~= "function" then return end
 	local ok, err = pcall(fn, ...)
@@ -284,6 +309,7 @@ function PanelUI:CreateWindow(config)
 		Font = Theme.FontBold,
 		TextSize = 14,
 		TextColor3 = Theme.Text,
+		AutoButtonColor = false,
 		BackgroundColor3 = Theme.Accent,
 		Size = UDim2.new(0, 32, 0, 32),
 		Position = UDim2.new(1, -80, 0.5, -16),
@@ -295,6 +321,7 @@ function PanelUI:CreateWindow(config)
 		Font = Theme.FontBold,
 		TextSize = 14,
 		TextColor3 = Theme.Text,
+		AutoButtonColor = false,
 		BackgroundColor3 = Theme.Accent,
 		Size = UDim2.new(0, 32, 0, 32),
 		Position = UDim2.new(1, -40, 0.5, -16),
@@ -303,6 +330,8 @@ function PanelUI:CreateWindow(config)
 
 	hoverTint(MinimizeBtn, Theme.Accent, Theme.AccentDim)
 	hoverTint(CloseBtn, Theme.Accent, Theme.AccentDim)
+	pressFeedback(MinimizeBtn)
+	pressFeedback(CloseBtn)
 
 	-- ---------------- Sidebar ----------------
 	local Sidebar = new("Frame", {
@@ -455,11 +484,11 @@ function PanelUI:CreateWindow(config)
 
 	MinimizeBtn.MouseButton1Click:Connect(function()
 		Window:Hide()
-		if Window.OnMinimize then safeCall(Window.OnMinimize) end
+		safeCall(Window.OnMinimize)
 	end)
 	CloseBtn.MouseButton1Click:Connect(function()
 		Window:Hide()
-		if Window.OnClose then safeCall(Window.OnClose) end
+		safeCall(Window.OnClose)
 	end)
 
 	-- ---------------- Arrastrar la ventana (desde la barra superior) ----------------
@@ -694,7 +723,7 @@ function PanelUI:CreateTab(config)
 		end
 		Page.Visible = true
 		TabButton.BackgroundColor3 = Theme.Accent
-		if Tab.OnSelect then Tab.OnSelect() end
+		safeCall(Tab.OnSelect)
 	end)
 
 	table.insert(self._tabs, Tab)
@@ -848,7 +877,8 @@ function PanelUI:CreateSectionLabel(text)
 	self._rowCount += 1
 end
 
--- Tarjeta de "Acceso rápido" (icono + título) — el click es un evento vacío
+-- Tarjeta de "Acceso rápido" (icono + título) — al hacer click ejecuta
+-- (de forma segura) la lógica que el usuario conecte en .OnClick
 function PanelUI:CreateQuickAccess(config)
 	config = config or {}
 
@@ -892,14 +922,16 @@ function PanelUI:CreateQuickAccess(config)
 
 	local QuickAccess = setmetatable({ Card = Card }, PanelUI)
 	ClickOverlay.MouseButton1Click:Connect(function()
-		if QuickAccess.OnClick then QuickAccess.OnClick() end
+		safeCall(QuickAccess.OnClick)
 	end)
 	hoverTint(Card, Theme.Panel, Theme.PanelAlt)
 
 	return QuickAccess
 end
 
--- Botón simple con texto — el evento OnClick queda vacío para tu lógica
+-- Botón simple con texto — al hacer click ejecuta (de forma segura) la
+-- lógica que el usuario conecte en .OnClick. Ahora se ajusta al ancho del
+-- texto en vez de tener un tamaño fijo, y tiene un pequeño efecto de "press".
 function PanelUI:CreateButton(config)
 	config = config or {}
 
@@ -910,22 +942,27 @@ function PanelUI:CreateButton(config)
 		TextColor3 = Theme.Text,
 		AutoButtonColor = false,
 		BackgroundColor3 = Theme.Accent,
-		Size = UDim2.new(0, 160, 0, 40),
+		AutomaticSize = Enum.AutomaticSize.X,
+		Size = UDim2.new(0, 0, 0, 38),
 		LayoutOrder = self._rowCount,
 		Parent = self.Page,
-	}, { corner(20), accentGradient() })
+	}, { corner(12), accentGradient(), stroke(Theme.Stroke, 1), pad(0, 0, 20, 0, 20) })
+
+	new("UISizeConstraint", { MinSize = Vector2.new(110, 38) }).Parent = Btn
 	self._rowCount += 1
 
 	local Button = setmetatable({ Instance = Btn }, PanelUI)
 	Btn.MouseButton1Click:Connect(function()
-		if Button.OnClick then Button.OnClick() end
+		safeCall(Button.OnClick)
 	end)
 	hoverTint(Btn, Theme.Accent, Theme.AccentDim)
+	pressFeedback(Btn)
 
 	return Button
 end
 
--- Toggle (interruptor) — el evento OnToggle(state) queda vacío
+-- Toggle (interruptor) — al cambiar de estado ejecuta (de forma segura) la
+-- lógica que el usuario conecte en .OnToggle(state)
 function PanelUI:CreateToggle(config)
 	config = config or {}
 	local state = config.Default or false
@@ -971,13 +1008,15 @@ function PanelUI:CreateToggle(config)
 		state = not state
 		TweenService:Create(Track, TweenInfo.new(0.15), { BackgroundColor3 = state and Theme.Accent or Theme.PanelAlt }):Play()
 		TweenService:Create(Knob, TweenInfo.new(0.15), { Position = state and UDim2.new(1, -19, 0.5, -8) or UDim2.new(0, 3, 0.5, -8) }):Play()
-		if Toggle.OnToggle then Toggle.OnToggle(state) end
+		safeCall(Toggle.OnToggle, state)
 	end)
 
 	return Toggle
 end
 
--- Slider (barra deslizable) — el evento OnChange(value) queda vacío.
+-- Slider (barra deslizable) — al arrastrar ejecuta (de forma segura) la
+-- lógica que el usuario conecte en .OnChange(value).
+-- Ahora es más compacto: menos alto, barra más delgada y knob más pequeño.
 -- config: Text, Min (default 0), Max (default 100), Default (valor inicial)
 function PanelUI:CreateSlider(config)
 	config = config or {}
@@ -986,43 +1025,43 @@ function PanelUI:CreateSlider(config)
 	local value = math.clamp(config.Default or min, min, max)
 
 	local Row = new("Frame", {
-		Size = UDim2.new(1, 0, 0, 56),
+		Size = UDim2.new(1, 0, 0, 46),
 		BackgroundColor3 = Theme.Panel,
 		BackgroundTransparency = Theme.PanelTransparency,
 		LayoutOrder = self._rowCount,
 		Parent = self.Page,
-	}, { corner(16), stroke(Theme.Stroke, 1), pad(0, 10, 16, 10, 16) })
+	}, { corner(14), stroke(Theme.Stroke, 1), pad(0, 8, 14, 8, 14) })
 	self._rowCount += 1
 
 	new("TextLabel", {
 		Text = config.Text or "Valor",
 		Font = Theme.Font,
-		TextSize = 14,
+		TextSize = 13,
 		TextColor3 = Theme.Text,
 		TextXAlignment = Enum.TextXAlignment.Left,
 		BackgroundTransparency = 1,
-		Size = UDim2.new(1, -50, 0, 18),
+		Size = UDim2.new(1, -46, 0, 16),
 		Parent = Row,
 	})
 
 	local ValueLabel = new("TextLabel", {
 		Text = tostring(value),
 		Font = Theme.FontSemibold,
-		TextSize = 13,
+		TextSize = 12,
 		TextColor3 = Theme.Accent,
 		TextXAlignment = Enum.TextXAlignment.Right,
 		BackgroundTransparency = 1,
-		Size = UDim2.new(0, 50, 0, 18),
-		Position = UDim2.new(1, -50, 0, 0),
+		Size = UDim2.new(0, 46, 0, 16),
+		Position = UDim2.new(1, -46, 0, 0),
 		Parent = Row,
 	})
 
 	local Track = new("Frame", {
-		Size = UDim2.new(1, 0, 0, 8),
-		Position = UDim2.new(0, 0, 0, 30),
+		Size = UDim2.new(1, 0, 0, 5),
+		Position = UDim2.new(0, 0, 0, 26),
 		BackgroundColor3 = Theme.PanelAlt,
 		Parent = Row,
-	}, { corner(4) })
+	}, { corner(3) })
 
 	local function ratio(v)
 		return (v - min) / math.max(max - min, 1e-6)
@@ -1032,14 +1071,14 @@ function PanelUI:CreateSlider(config)
 		Size = UDim2.new(ratio(value), 0, 1, 0),
 		BackgroundColor3 = Theme.Accent,
 		Parent = Track,
-	}, { corner(4) })
+	}, { corner(3) })
 
 	local Knob = new("Frame", {
-		Size = UDim2.new(0, 14, 0, 14),
-		Position = UDim2.new(ratio(value), -7, 0.5, -7),
+		Size = UDim2.new(0, 12, 0, 12),
+		Position = UDim2.new(ratio(value), -6, 0.5, -6),
 		BackgroundColor3 = Theme.Text,
 		Parent = Track,
-	}, { corner(7) })
+	}, { corner(6), stroke(Theme.Stroke, 1) })
 
 	local Slider = setmetatable({ Track = Track, Fill = Fill, Knob = Knob, Value = value }, PanelUI)
 
@@ -1049,10 +1088,10 @@ function PanelUI:CreateSlider(config)
 		local relative = math.clamp((xPos - Track.AbsolutePosition.X) / Track.AbsoluteSize.X, 0, 1)
 		value = math.floor(min + relative * (max - min) + 0.5)
 		Fill.Size = UDim2.new(relative, 0, 1, 0)
-		Knob.Position = UDim2.new(relative, -7, 0.5, -7)
+		Knob.Position = UDim2.new(relative, -6, 0.5, -6)
 		ValueLabel.Text = tostring(value)
 		Slider.Value = value
-		if Slider.OnChange then Slider.OnChange(value) end
+		safeCall(Slider.OnChange, value)
 	end
 
 	Track.InputBegan:Connect(function(input)
