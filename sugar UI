@@ -143,6 +143,14 @@ local function hoverTint(guiObject, baseColor, hoverColor)
 	end)
 end
 
+-- Degradado sutil rojo→rojo oscuro, para darle profundidad a botones y acentos
+local function accentGradient(rotation)
+	return new("UIGradient", {
+		Color = ColorSequence.new(Theme.Accent, Theme.AccentDim),
+		Rotation = rotation or 90,
+	})
+end
+
 -- ============================================================
 -- 	CREATE WINDOW
 -- ============================================================
@@ -259,7 +267,7 @@ function PanelUI:CreateWindow(config)
 		Size = UDim2.new(0, 32, 0, 32),
 		Position = UDim2.new(1, -80, 0.5, -16),
 		Parent = TopBar,
-	}, { corner(8) })
+	}, { corner(8), accentGradient() })
 
 	local CloseBtn = new("TextButton", {
 		Text = "✕",
@@ -270,7 +278,7 @@ function PanelUI:CreateWindow(config)
 		Size = UDim2.new(0, 32, 0, 32),
 		Position = UDim2.new(1, -40, 0.5, -16),
 		Parent = TopBar,
-	}, { corner(8) })
+	}, { corner(8), accentGradient() })
 
 	hoverTint(MinimizeBtn, Theme.Accent, Theme.AccentDim)
 	hoverTint(CloseBtn, Theme.Accent, Theme.AccentDim)
@@ -298,18 +306,7 @@ function PanelUI:CreateWindow(config)
 		Size = UDim2.new(1, -32, 0, 36),
 		Position = UDim2.new(0, 16, 0, 16),
 		Parent = Sidebar,
-	}, { corner(8), pad(0, 0, 0, 0, 34), stroke(Theme.Stroke, 1) })
-
-	new("TextLabel", {
-		Text = "🔍",
-		Font = Theme.Font,
-		TextSize = 13,
-		TextColor3 = Theme.TextFaint,
-		BackgroundTransparency = 1,
-		Size = UDim2.new(0, 20, 1, 0),
-		Position = UDim2.new(0, 10, 0, 0),
-		Parent = SearchBox,
-	})
+	}, { corner(8), pad(0, 0, 0, 0, 12), stroke(Theme.Stroke, 1) })
 
 	local SidebarList = new("ScrollingFrame", {
 		Name = "SidebarList",
@@ -365,6 +362,29 @@ function PanelUI:CreateWindow(config)
 		pad(0, 20, 20, 20, 20),
 	})
 
+	-- ---------------- Burbuja flotante (aparece al minimizar / cerrar) ----------------
+	local Bubble = new("TextButton", {
+		Name = "Bubble",
+		Text = "",
+		AutoButtonColor = false,
+		Size = UDim2.new(0, 50, 0, 50),
+		Position = UDim2.new(1, -80, 1, -80),
+		BackgroundColor3 = Theme.Accent,
+		Visible = false,
+		Parent = ScreenGui,
+	}, { corner(25), stroke(Theme.Stroke, 1), accentGradient(135) })
+
+	new("TextLabel", {
+		Text = "🍬",
+		Font = Theme.FontBold,
+		TextSize = 22,
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 1, 0),
+		Parent = Bubble,
+	})
+
+	hoverTint(Bubble, Theme.Accent, Theme.AccentDim)
+
 	-- ============================================================
 	local Window = setmetatable({
 		ScreenGui = ScreenGui,
@@ -374,16 +394,50 @@ function PanelUI:CreateWindow(config)
 		ProfileRow = ProfileRow,
 		Content = Content,
 		ContentScroll = ContentScroll,
+		Bubble = Bubble,
 		_tabs = {},
 		_sections = {},
 	}, PanelUI)
+
+	Bubble.MouseButton1Click:Connect(function()
+		Window:Show()
+	end)
+
+	-- Arrastrar la burbuja también
+	do
+		local dragging = false
+		local dragStart, startPos
+		Bubble.InputBegan:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1
+				or input.UserInputType == Enum.UserInputType.Touch then
+				dragging = true
+				dragStart = input.Position
+				startPos = Bubble.Position
+				input.Changed:Connect(function()
+					if input.UserInputState == Enum.UserInputState.End then
+						dragging = false
+					end
+				end)
+			end
+		end)
+		UserInputService.InputChanged:Connect(function(input)
+			if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+				or input.UserInputType == Enum.UserInputType.Touch) then
+				local delta = input.Position - dragStart
+				Bubble.Position = UDim2.new(
+					startPos.X.Scale, startPos.X.Offset + delta.X,
+					startPos.Y.Scale, startPos.Y.Offset + delta.Y
+				)
+			end
+		end)
+	end
 
 	MinimizeBtn.MouseButton1Click:Connect(function()
 		Window:Hide()
 		if Window.OnMinimize then Window.OnMinimize() end
 	end)
 	CloseBtn.MouseButton1Click:Connect(function()
-		Window:Destroy()
+		Window:Hide()
 		if Window.OnClose then Window.OnClose() end
 	end)
 
@@ -442,16 +496,26 @@ end
 -- Muestra la ventana (por si estaba oculta con :Hide())
 function PanelUI:Show()
 	self.Root.Visible = true
+	if self.Bubble then
+		self.Bubble.Visible = false
+	end
 end
 
--- Oculta la ventana sin destruirla (equivalente a "minimizar")
+-- Oculta la ventana y muestra la burbuja flotante para volver a abrirla
 function PanelUI:Hide()
 	self.Root.Visible = false
+	if self.Bubble then
+		self.Bubble.Visible = true
+	end
 end
 
 -- Alterna entre mostrar/ocultar
 function PanelUI:Toggle()
-	self.Root.Visible = not self.Root.Visible
+	if self.Root.Visible then
+		self:Hide()
+	else
+		self:Show()
+	end
 end
 
 -- Destruye la ventana y limpia sus referencias
@@ -823,7 +887,7 @@ function PanelUI:CreateButton(config)
 		Size = UDim2.new(0, 160, 0, 40),
 		LayoutOrder = self._rowCount,
 		Parent = self.Page,
-	}, { corner(9) })
+	}, { corner(9), accentGradient() })
 	self._rowCount += 1
 
 	local Button = setmetatable({ Instance = Btn }, PanelUI)
@@ -885,6 +949,107 @@ function PanelUI:CreateToggle(config)
 	end)
 
 	return Toggle
+end
+
+-- Slider (barra deslizable) — el evento OnChange(value) queda vacío.
+-- config: Text, Min (default 0), Max (default 100), Default (valor inicial)
+function PanelUI:CreateSlider(config)
+	config = config or {}
+	local min = config.Min or 0
+	local max = config.Max or 100
+	local value = math.clamp(config.Default or min, min, max)
+
+	local Row = new("Frame", {
+		Size = UDim2.new(1, 0, 0, 56),
+		BackgroundColor3 = Theme.Panel,
+		BackgroundTransparency = Theme.PanelTransparency,
+		LayoutOrder = self._rowCount,
+		Parent = self.Page,
+	}, { corner(10), stroke(Theme.Stroke, 1), pad(0, 10, 16, 10, 16) })
+	self._rowCount += 1
+
+	new("TextLabel", {
+		Text = config.Text or "Valor",
+		Font = Theme.Font,
+		TextSize = 14,
+		TextColor3 = Theme.Text,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, -50, 0, 18),
+		Parent = Row,
+	})
+
+	local ValueLabel = new("TextLabel", {
+		Text = tostring(value),
+		Font = Theme.FontSemibold,
+		TextSize = 13,
+		TextColor3 = Theme.Accent,
+		TextXAlignment = Enum.TextXAlignment.Right,
+		BackgroundTransparency = 1,
+		Size = UDim2.new(0, 50, 0, 18),
+		Position = UDim2.new(1, -50, 0, 0),
+		Parent = Row,
+	})
+
+	local Track = new("Frame", {
+		Size = UDim2.new(1, 0, 0, 8),
+		Position = UDim2.new(0, 0, 0, 30),
+		BackgroundColor3 = Theme.PanelAlt,
+		Parent = Row,
+	}, { corner(4) })
+
+	local function ratio(v)
+		return (v - min) / math.max(max - min, 1e-6)
+	end
+
+	local Fill = new("Frame", {
+		Size = UDim2.new(ratio(value), 0, 1, 0),
+		BackgroundColor3 = Theme.Accent,
+		Parent = Track,
+	}, { corner(4) })
+
+	local Knob = new("Frame", {
+		Size = UDim2.new(0, 14, 0, 14),
+		Position = UDim2.new(ratio(value), -7, 0.5, -7),
+		BackgroundColor3 = Theme.Text,
+		Parent = Track,
+	}, { corner(7) })
+
+	local Slider = setmetatable({ Track = Track, Fill = Fill, Knob = Knob, Value = value }, PanelUI)
+
+	local dragging = false
+
+	local function setFromX(xPos)
+		local relative = math.clamp((xPos - Track.AbsolutePosition.X) / Track.AbsoluteSize.X, 0, 1)
+		value = math.floor(min + relative * (max - min) + 0.5)
+		Fill.Size = UDim2.new(relative, 0, 1, 0)
+		Knob.Position = UDim2.new(relative, -7, 0.5, -7)
+		ValueLabel.Text = tostring(value)
+		Slider.Value = value
+		if Slider.OnChange then Slider.OnChange(value) end
+	end
+
+	Track.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = true
+			setFromX(input.Position.X)
+			input.Changed:Connect(function()
+				if input.UserInputState == Enum.UserInputState.End then
+					dragging = false
+				end
+			end)
+		end
+	end)
+
+	UserInputService.InputChanged:Connect(function(input)
+		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+			or input.UserInputType == Enum.UserInputType.Touch) then
+			setFromX(input.Position.X)
+		end
+	end)
+
+	return Slider
 end
 
 return PanelUI
