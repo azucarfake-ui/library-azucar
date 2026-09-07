@@ -47,10 +47,8 @@
 		local SugarUI = require(script.SugarUI)
 
 		local Window = SugarUI:CreateWindow({
-			Title      = "Top 1 Col",
-			Badge      = "ADMIN",
-			ServerName = "Servidor en línea",
-			ServerOn   = true,
+			Title = "Top 1 Col",
+			Badge = "ADMIN",
 		})
 
 		local Principal = Window:CreateTab({ Name = "Principal", Icon = "P", Section = "GENERAL" })
@@ -364,28 +362,20 @@ function SugarUI:CreateWindow(config)
 	end
 
 	local ServerPill = new("Frame", {
-		Size = UDim2.new(0, 190, 0, 32),
+		Size = UDim2.new(0, 150, 0, 32),
 		Position = UDim2.new(0, 260, 0.5, -16),
 		BackgroundColor3 = Theme.PanelAlt,
 		Parent = TopBar,
 	}, { corner(16), stroke(Theme.Stroke, 1) })
 
-	local ServerDot = new("Frame", {
-		Size = UDim2.new(0, 8, 0, 8),
-		Position = UDim2.new(0, 14, 0.5, -4),
-		BackgroundColor3 = config.ServerOn ~= false and Theme.Online or Theme.TextFaint,
-		Parent = ServerPill,
-	}, { corner(4) })
-
 	new("TextLabel", {
-		Text = config.ServerName or "Servidor en línea",
-		Font = Theme.Font,
+		Text = "Azucar UI",
+		Font = Theme.FontSemibold,
 		TextSize = 13,
 		TextColor3 = Theme.TextDim,
-		TextXAlignment = Enum.TextXAlignment.Left,
+		TextXAlignment = Enum.TextXAlignment.Center,
 		BackgroundTransparency = 1,
-		Size = UDim2.new(1, -32, 1, 0),
-		Position = UDim2.new(0, 28, 0, 0),
+		Size = UDim2.new(1, 0, 1, 0),
 		Parent = ServerPill,
 	})
 
