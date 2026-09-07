@@ -1,56 +1,63 @@
 --[[
 	SugarUI
 	--------
-	Librería de UI en Luau para Roblox, pensada para conectar CUALQUIER lógica
-	externa (bucles, toggles de habilidades, sliders de configuración, etc.)
-	de forma fluida y sin congelar el hilo principal ni la interfaz.
+	Misma interfaz que PanelUI (tema oscuro, acentos rojos, badge de admin,
+	pill de servidor, sidebar con buscador/secciones/perfil, tarjetas de
+	estadísticas y accesos rápidos) — pero ahora con un NÚCLEO capaz de
+	ejecutar CUALQUIER lógica externa conectada (bucles de combate Auto-M1,
+	toggles de habilidades, sliders de configuración, dropdowns, keybinds...)
+	sin congelar jamás la interfaz ni el hilo principal del juego.
 
-	Diferencias clave respecto a una librería "solo visual":
+	Qué cambió respecto a una librería "solo visual":
 
 	1. INVOCACIÓN ASÍNCRONA SEGURA
-	   Todo callback conectado por el usuario se ejecuta dentro de:
-	       task.spawn(function() pcall(Callback, ...) end)
-	   Esto significa que si el usuario mete un `while true do ... end` dentro
-	   de un Toggle, ese bucle corre en su propio hilo (task.spawn) y NUNCA
-	   bloquea el render de la UI ni el resto del juego. Si el callback lanza
+	   Todo callback conectado por el usuario corre dentro de:
+	       task.spawn(function() pcall(fn, ...) end)
+	   Un `while true do ... end` dentro de un Toggle o Keybind vive en su
+	   propio hilo y NUNCA bloquea el render de la UI. Si el callback lanza
 	   un error, pcall lo atrapa y se reporta con warn(), sin romper nada.
 
 	2. CALLBACKS CON VALOR POR DEFECTO
-	   config.Callback or function() end — nunca se intenta llamar nil.
+	   config.Callback or function() end — nunca se llama nil.
 
 	3. CONTROLADORES DINÁMICOS
-	   Cada componente (Toggle, Slider, Dropdown, Keybind, Button) devuelve un
-	   objeto con :Set(...) que actualiza la UI Y dispara el callback, para
-	   que puedas controlar el panel programáticamente desde tu propio script
-	   (ej: SugarUI.Flags["AutoFarm"]:Set(true)).
+	   Cada componente interactivo devuelve un objeto con :Set(...) que
+	   actualiza la UI y dispara la lógica, para poder controlar el panel
+	   programáticamente desde tu propio script.
 
 	4. FLAGS GLOBALES
-	   Si defines config.Flag = "NombreUnico", el controlador se guarda en
-	   SugarUI.Flags[config.Flag] y su valor actual en
-	   SugarUI.FlagValues[config.Flag], accesibles desde cualquier script.
+	   config.Flag = "AutoM1" registra el controlador en SugarUI.Flags y su
+	   valor "crudo" en SugarUI.FlagValues, accesibles desde cualquier lado.
 
 	5. LIMPIEZA DE CONEXIONES
-	   Cada Window guarda todas sus RBXScriptConnections en _connections y las
-	   desconecta en :Destroy(), evitando fugas de memoria.
+	   Cada Window guarda todas sus RBXScriptConnections en _connections y
+	   las desconecta en :Destroy(), evitando fugas de memoria.
 
 	Uso básico:
 
 		local SugarUI = require(script.SugarUI)
 
-		local Window = SugarUI:CreateWindow({ Title = "Mi Panel" })
-		local Combate = Window:CreateTab({ Name = "Combate", Icon = "C" })
+		local Window = SugarUI:CreateWindow({
+			Title      = "Top 1 Col",
+			Badge      = "ADMIN",
+			ServerName = "Servidor en línea",
+			ServerOn   = true,
+		})
 
-		local autoM1 = Combate:CreateToggle({
+		local Principal = Window:CreateTab({ Name = "Principal", Icon = "P", Section = "GENERAL" })
+		local Combate    = Window:CreateTab({ Name = "Combate",   Icon = "C", Section = "ACCIONES" })
+
+		Principal:CreateStatRow()
+		Principal:CreateStat({ Value = "24", Label = "jugadores en línea" })
+
+		Combate:CreateToggle({
 			Text = "Auto-M1",
 			Flag = "AutoM1",
 			Callback = function(state)
-				-- Esto puede ser un bucle infinito sin miedo:
-				task.spawn(function()
-					while state and SugarUI.FlagValues["AutoM1"] do
-						-- tu lógica de combate aquí
-						task.wait(0.1)
-					end
-				end)
+				while state and SugarUI.FlagValues["AutoM1"] do
+					-- tu lógica de combate aquí
+					task.wait(0.1)
+				end
 			end,
 		})
 
@@ -68,7 +75,7 @@ SugarUI.__index = SugarUI
 -- ============================================================
 -- 	PROPIEDADES DE LIBRERÍA
 -- ============================================================
-SugarUI.Version    = "1.0.0"
+SugarUI.Version    = "1.1.0"
 SugarUI.Windows    = {}
 SugarUI.Flags      = {}   -- Flags[flagName] = controlador (con :Set, :Get, etc.)
 SugarUI.FlagValues = {}   -- FlagValues[flagName] = valor actual "crudo"
@@ -95,32 +102,32 @@ local function getGuiParent()
 end
 
 -- ============================================================
--- 	PALETA / TEMA ("sugar" — rosa/morado dulce sobre fondo oscuro)
+-- 	PALETA / TEMA (idéntica a PanelUI: rojo oscuro)
 -- ============================================================
 local Theme = {
-	Background   = Color3.fromRGB(24, 18, 28),
-	Sidebar      = Color3.fromRGB(28, 21, 34),
-	Panel        = Color3.fromRGB(34, 25, 42),
-	PanelAlt     = Color3.fromRGB(44, 32, 54),
-	Accent       = Color3.fromRGB(255, 105, 180),
-	AccentDim    = Color3.fromRGB(190, 70, 135),
-	Text         = Color3.fromRGB(240, 240, 245),
-	TextDim      = Color3.fromRGB(200, 190, 205),
-	TextFaint    = Color3.fromRGB(150, 140, 160),
-	Online       = Color3.fromRGB(90, 220, 150),
-	Stroke       = Color3.fromRGB(60, 46, 72),
-	Font         = Enum.Font.GothamMedium,
-	FontBold     = Enum.Font.GothamBold,
-	FontSemibold = Enum.Font.GothamSemibold,
+	Background      = Color3.fromRGB(46, 12, 16),
+	Sidebar         = Color3.fromRGB(42, 11, 15),
+	Panel           = Color3.fromRGB(58, 16, 20),
+	PanelAlt        = Color3.fromRGB(70, 20, 25),
+	Accent          = Color3.fromRGB(214, 38, 51),
+	AccentDim       = Color3.fromRGB(150, 26, 36),
+	Text            = Color3.fromRGB(240, 240, 242),
+	TextDim         = Color3.fromRGB(210, 175, 178),
+	TextFaint       = Color3.fromRGB(170, 130, 133),
+	Online          = Color3.fromRGB(63, 201, 141),
+	Stroke          = Color3.fromRGB(90, 30, 35),
+	Font            = Enum.Font.GothamMedium,
+	FontBold        = Enum.Font.GothamBold,
+	FontSemibold    = Enum.Font.GothamSemibold,
 
-	BackgroundTransparency = 0.15,
-	PanelTransparency       = 0.15,
+	BackgroundTransparency = 0.35,
+	PanelTransparency       = 0.25,
 }
 
 SugarUI.Theme = Theme
 
 -- ============================================================
--- 	HELPERS DE CONSTRUCCIÓN
+-- 	HELPERS
 -- ============================================================
 local function new(class, props, children)
 	local inst = Instance.new(class)
@@ -177,9 +184,9 @@ end
 -- ============================================================
 -- 	NÚCLEO: INVOCACIÓN ASÍNCRONA SEGURA
 -- ============================================================
--- Punto central pedido en los requisitos: cada callback conectado por el
--- usuario corre en su PROPIO hilo (task.spawn) y está protegido con pcall.
--- Un `while true do` dentro de un callback jamás congela la UI ni el juego.
+-- Cada callback conectado por el usuario corre en su PROPIO hilo
+-- (task.spawn) y está protegido con pcall. Un `while true do` dentro de un
+-- callback jamás congela la UI ni el juego.
 local function safeCall(fn, ...)
 	fn = fn or function() end
 	if typeof(fn) ~= "function" then return end
@@ -195,7 +202,6 @@ local function safeCall(fn, ...)
 	end)
 end
 
--- Registra un valor bajo un Flag global, si se proporcionó uno.
 local function registerFlag(flagName, controller, initialValue)
 	if not flagName then return end
 	SugarUI.Flags[flagName] = controller
@@ -250,15 +256,65 @@ function SugarUI:CreateWindow(config)
 	}, { corner(16), stroke(Theme.Stroke, 1) })
 
 	new("TextLabel", {
+		Text = "1",
+		Font = Theme.FontBold,
+		TextSize = 16,
+		TextColor3 = Theme.Text,
+		BackgroundColor3 = Theme.Accent,
+		Size = UDim2.new(0, 32, 0, 32),
+		Position = UDim2.new(0, 16, 0.5, -16),
+		Parent = TopBar,
+	}, { corner(16), accentGradient() })
+
+	new("TextLabel", {
 		Text = config.Title or "Panel",
 		Font = Theme.FontBold,
 		TextSize = 17,
 		TextColor3 = Theme.Text,
 		TextXAlignment = Enum.TextXAlignment.Left,
 		BackgroundTransparency = 1,
-		Size = UDim2.new(0, 220, 0, 20),
-		Position = UDim2.new(0, 18, 0.5, -10),
+		Size = UDim2.new(0, 160, 0, 20),
+		Position = UDim2.new(0, 60, 0.5, -10),
 		Parent = TopBar,
+	})
+
+	if config.Badge then
+		new("TextLabel", {
+			Text = config.Badge,
+			Font = Theme.FontBold,
+			TextSize = 11,
+			TextColor3 = Theme.Text,
+			BackgroundColor3 = Theme.Accent,
+			Size = UDim2.new(0, 54, 0, 22),
+			Position = UDim2.new(0, 220, 0.5, -11),
+			Parent = TopBar,
+		}, { corner(11), accentGradient() })
+	end
+
+	local ServerPill = new("Frame", {
+		Size = UDim2.new(0, 190, 0, 32),
+		Position = UDim2.new(0, 300, 0.5, -16),
+		BackgroundColor3 = Theme.PanelAlt,
+		Parent = TopBar,
+	}, { corner(16), stroke(Theme.Stroke, 1) })
+
+	local ServerDot = new("Frame", {
+		Size = UDim2.new(0, 8, 0, 8),
+		Position = UDim2.new(0, 14, 0.5, -4),
+		BackgroundColor3 = config.ServerOn ~= false and Theme.Online or Theme.TextFaint,
+		Parent = ServerPill,
+	}, { corner(4) })
+
+	new("TextLabel", {
+		Text = config.ServerName or "Servidor en línea",
+		Font = Theme.Font,
+		TextSize = 13,
+		TextColor3 = Theme.TextDim,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, -32, 1, 0),
+		Position = UDim2.new(0, 28, 0, 0),
+		Parent = ServerPill,
 	})
 
 	local MinimizeBtn = new("TextButton", {
@@ -300,9 +356,25 @@ function SugarUI:CreateWindow(config)
 		Parent = Root,
 	}, { corner(16), stroke(Theme.Stroke, 1) })
 
+	new("TextBox", {
+		PlaceholderText = "Buscar pestaña...",
+		Text = "",
+		Font = Theme.Font,
+		TextSize = 13,
+		TextColor3 = Theme.Text,
+		PlaceholderColor3 = Theme.TextFaint,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		ClearTextOnFocus = false,
+		BackgroundColor3 = Theme.PanelAlt,
+		Size = UDim2.new(1, -32, 0, 36),
+		Position = UDim2.new(0, 16, 0, 16),
+		Parent = Sidebar,
+	}, { corner(18), pad(0, 0, 0, 0, 12), stroke(Theme.Stroke, 1) })
+
 	local SidebarList = new("ScrollingFrame", {
 		Name = "SidebarList",
-		Size = UDim2.new(1, 0, 1, 0),
+		Size = UDim2.new(1, 0, 1, -142),
+		Position = UDim2.new(0, 0, 0, 66),
 		BackgroundTransparency = 1,
 		ScrollBarThickness = 3,
 		ScrollBarImageColor3 = Theme.Stroke,
@@ -311,7 +383,23 @@ function SugarUI:CreateWindow(config)
 		Parent = Sidebar,
 	}, {
 		new("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }),
-		pad(0, 16, 16, 16, 16),
+		pad(0, 4, 16, 16, 16),
+	})
+
+	-- ---------------- Tarjeta de perfil ----------------
+	new("Frame", {
+		Size = UDim2.new(1, -32, 0, 1),
+		Position = UDim2.new(0, 16, 1, -78),
+		BackgroundColor3 = Theme.Stroke,
+		Parent = Sidebar,
+	})
+
+	local ProfileRow = new("Frame", {
+		Name = "ProfileRow",
+		Size = UDim2.new(1, -32, 0, 46),
+		Position = UDim2.new(0, 16, 1, -60),
+		BackgroundTransparency = 1,
+		Parent = Sidebar,
 	})
 
 	-- ---------------- Área de contenido ----------------
@@ -333,16 +421,14 @@ function SugarUI:CreateWindow(config)
 		AutomaticCanvasSize = Enum.AutomaticSize.Y,
 		Parent = Content,
 	}, {
-		new("UIListLayout", { Padding = UDim.new(0, 16), SortOrder = Enum.SortOrder.LayoutOrder }),
+		new("UIListLayout", { Padding = UDim.new(0, 20), SortOrder = Enum.SortOrder.LayoutOrder }),
 		pad(0, 20, 20, 20, 20),
 	})
 
 	-- ---------------- Burbuja flotante ----------------
 	local Bubble = new("TextButton", {
 		Name = "Bubble",
-		Text = "🍬",
-		Font = Theme.FontBold,
-		TextSize = 20,
+		Text = "",
 		AutoButtonColor = false,
 		Size = UDim2.new(0, 50, 0, 50),
 		Position = UDim2.new(1, -80, 1, -80),
@@ -351,17 +437,29 @@ function SugarUI:CreateWindow(config)
 		Parent = ScreenGui,
 	}, { corner(25), stroke(Theme.Stroke, 1), accentGradient(135) })
 
+	new("TextLabel", {
+		Text = "🍬",
+		Font = Theme.FontBold,
+		TextSize = 22,
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 1, 0),
+		Parent = Bubble,
+	})
+
 	hoverTint(Bubble, Theme.Accent, Theme.AccentDim)
 
+	-- ============================================================
 	local Window = setmetatable({
 		ScreenGui = ScreenGui,
 		Root = Root,
 		Sidebar = Sidebar,
 		SidebarList = SidebarList,
+		ProfileRow = ProfileRow,
 		Content = Content,
 		ContentScroll = ContentScroll,
 		Bubble = Bubble,
 		_tabs = {},
+		_sections = {},
 		_connections = {},
 	}, SugarUI)
 
@@ -374,17 +472,45 @@ function SugarUI:CreateWindow(config)
 		Window:Show()
 	end))
 
+	-- Arrastrar la burbuja
+	do
+		local dragging = false
+		local dragStart, startPos
+		track(Bubble.InputBegan:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1
+				or input.UserInputType == Enum.UserInputType.Touch then
+				dragging = true
+				dragStart = input.Position
+				startPos = Bubble.Position
+				input.Changed:Connect(function()
+					if input.UserInputState == Enum.UserInputState.End then
+						dragging = false
+					end
+				end)
+			end
+		end))
+		track(UserInputService.InputChanged:Connect(function(input)
+			if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+				or input.UserInputType == Enum.UserInputType.Touch) then
+				local delta = input.Position - dragStart
+				Bubble.Position = UDim2.new(
+					startPos.X.Scale, startPos.X.Offset + delta.X,
+					startPos.Y.Scale, startPos.Y.Offset + delta.Y
+				)
+			end
+		end))
+	end
+
 	track(MinimizeBtn.MouseButton1Click:Connect(function()
 		Window:Hide()
 		safeCall(Window.OnMinimize)
 	end))
-
 	track(CloseBtn.MouseButton1Click:Connect(function()
 		Window:Hide()
 		safeCall(Window.OnClose)
 	end))
 
-	-- ---------------- Arrastrar ventana ----------------
+	-- ---------------- Arrastrar la ventana ----------------
 	do
 		local dragging = false
 		local dragStart, startPos
@@ -445,9 +571,8 @@ function SugarUI:Toggle()
 	if self.Root.Visible then self:Hide() else self:Show() end
 end
 
--- Limpieza de eventos: desconecta TODAS las conexiones guardadas en
--- _connections (arrastre, atajos de teclado, clicks de tabs/elementos, etc.)
--- y destruye la instancia. Evita fugas de memoria si el panel se recrea.
+-- Desconecta TODAS las conexiones guardadas (arrastre, atajos, clicks de
+-- tabs/elementos, etc.) y destruye la instancia. Evita fugas de memoria.
 function SugarUI:Destroy()
 	if self._connections then
 		for _, conn in ipairs(self._connections) do
@@ -466,31 +591,82 @@ function SugarUI:Destroy()
 end
 
 -- ============================================================
+-- 	SECCIONES DEL SIDEBAR (GENERAL / ACCIONES / etc.)
+-- ============================================================
+function SugarUI:_getSection(name)
+	if self._sections[name] then
+		return self._sections[name]
+	end
+
+	new("TextLabel", {
+		Text = name,
+		Font = Theme.FontSemibold,
+		TextSize = 11,
+		TextColor3 = Theme.TextFaint,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 0, 18),
+		LayoutOrder = #self._sections * 1000,
+		Parent = self.SidebarList,
+	})
+
+	self._sections[name] = true
+	return true
+end
+
+function SugarUI:CreateDivider()
+	new("Frame", {
+		Size = UDim2.new(1, 0, 0, 1),
+		BackgroundColor3 = Theme.Stroke,
+		LayoutOrder = 900 + (#self._sections * 1000),
+		Parent = self.SidebarList,
+	})
+end
+
+-- ============================================================
 -- 	CREATE TAB
 -- ============================================================
 function SugarUI:CreateTab(config)
 	config = config or {}
+	self:_getSection(config.Section or "GENERAL")
 
 	local isFirst = #self._tabs == 0
+
+	local tabChildren = { corner(22) }
+	if isFirst then
+		table.insert(tabChildren, accentGradient())
+	end
 
 	local TabButton = new("TextButton", {
 		Name = config.Name,
 		Text = "",
 		AutoButtonColor = false,
 		BackgroundColor3 = isFirst and Theme.Accent or Theme.Sidebar,
-		Size = UDim2.new(1, 0, 0, 40),
+		Size = UDim2.new(1, 0, 0, 44),
 		Parent = self.SidebarList,
-	}, isFirst and { corner(14), accentGradient() } or { corner(14) })
+	}, tabChildren)
 
 	new("TextLabel", {
-		Text = (config.Icon and (config.Icon .. "  ") or "") .. (config.Name or "Tab"),
+		Text = config.Icon or "•",
+		Font = Theme.FontBold,
+		TextSize = 13,
+		TextColor3 = Theme.Text,
+		BackgroundColor3 = isFirst and Color3.fromRGB(255,255,255) or Theme.PanelAlt,
+		BackgroundTransparency = isFirst and 0.85 or 0,
+		Size = UDim2.new(0, 26, 0, 26),
+		Position = UDim2.new(0, 9, 0.5, -13),
+		Parent = TabButton,
+	}, { corner(13) })
+
+	new("TextLabel", {
+		Text = config.Name or "Tab",
 		Font = Theme.FontSemibold,
 		TextSize = 14,
 		TextColor3 = Theme.Text,
 		TextXAlignment = Enum.TextXAlignment.Left,
 		BackgroundTransparency = 1,
-		Size = UDim2.new(1, -24, 1, 0),
-		Position = UDim2.new(0, 14, 0, 0),
+		Size = UDim2.new(1, -55, 1, 0),
+		Position = UDim2.new(0, 45, 0, 0),
 		Parent = TabButton,
 	})
 
@@ -499,21 +675,47 @@ function SugarUI:CreateTab(config)
 	end
 
 	local Page = new("Frame", {
-		Name = (config.Name or "Tab") .. "Page",
+		Name = config.Name .. "Page",
 		Size = UDim2.new(1, 0, 0, 0),
 		AutomaticSize = Enum.AutomaticSize.Y,
 		BackgroundTransparency = 1,
 		Visible = isFirst,
+		LayoutOrder = 1,
 		Parent = self.ContentScroll,
 	}, {
-		new("UIListLayout", { Padding = UDim.new(0, 12), SortOrder = Enum.SortOrder.LayoutOrder }),
+		new("UIListLayout", { Padding = UDim.new(0, 18), SortOrder = Enum.SortOrder.LayoutOrder }),
+	})
+
+	new("TextLabel", {
+		Text = config.Name,
+		Font = Theme.FontBold,
+		TextSize = 26,
+		TextColor3 = Theme.Text,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 0, 32),
+		LayoutOrder = 0,
+		Parent = Page,
+	})
+
+	new("TextLabel", {
+		Text = config.Description or "",
+		Font = Theme.Font,
+		TextSize = 14,
+		TextColor3 = Theme.TextDim,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 0, 20),
+		LayoutOrder = 1,
+		Visible = config.Description ~= nil,
+		Parent = Page,
 	})
 
 	local Tab = setmetatable({
 		Window = self,
 		Button = TabButton,
 		Page = Page,
-		_rowCount = 0,
+		_rowCount = 2,
 	}, SugarUI)
 
 	table.insert(self._connections, TabButton.MouseButton1Click:Connect(function()
@@ -531,16 +733,220 @@ function SugarUI:CreateTab(config)
 end
 
 -- ============================================================
--- 	COMPONENTES INTERACTIVOS
---
--- 	Cada uno sigue el mismo patrón:
--- 	  1. config.Callback or function() end   (nunca nil)
--- 	  2. safeCall(...) -> task.spawn + pcall, nunca congela nada
--- 	  3. Se devuelve un controlador con :Set(...) para uso programático
--- 	  4. Si hay config.Flag, se registra en SugarUI.Flags / FlagValues
+-- 	PERFIL DE USUARIO
 -- ============================================================
+function SugarUI:CreateProfile(config)
+	config = config or {}
+	local Row = self.ProfileRow
+	if not Row then return end
 
--- ---------------- Button ----------------
+	for _, child in ipairs(Row:GetChildren()) do
+		child:Destroy()
+	end
+
+	new("TextLabel", {
+		Text = config.Initials or "?",
+		Font = Theme.FontBold,
+		TextSize = 13,
+		TextColor3 = Theme.Text,
+		BackgroundColor3 = Theme.Accent,
+		Size = UDim2.new(0, 34, 0, 34),
+		Position = UDim2.new(0, 0, 0.5, -17),
+		Parent = Row,
+	}, { corner(17) })
+
+	new("TextLabel", {
+		Text = config.Name or "Usuario",
+		Font = Theme.FontSemibold,
+		TextSize = 14,
+		TextColor3 = Theme.Text,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, -46, 0, 18),
+		Position = UDim2.new(0, 46, 0, 2),
+		Parent = Row,
+	})
+
+	local RoleRow = new("Frame", {
+		Size = UDim2.new(1, -46, 0, 16),
+		Position = UDim2.new(0, 46, 0, 22),
+		BackgroundTransparency = 1,
+		Parent = Row,
+	})
+
+	new("Frame", {
+		Size = UDim2.new(0, 7, 0, 7),
+		Position = UDim2.new(0, 0, 0.5, -3.5),
+		BackgroundColor3 = config.Online ~= false and Theme.Online or Theme.TextFaint,
+		Parent = RoleRow,
+	}, { corner(4) })
+
+	new("TextLabel", {
+		Text = config.Role or "",
+		Font = Theme.Font,
+		TextSize = 12,
+		TextColor3 = Theme.TextDim,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, -14, 1, 0),
+		Position = UDim2.new(0, 14, 0, 0),
+		Parent = RoleRow,
+	})
+end
+
+-- ============================================================
+-- 	ESTADÍSTICAS
+-- ============================================================
+function SugarUI:CreateStatRow()
+	local Row = new("Frame", {
+		Size = UDim2.new(1, 0, 0, 60),
+		BackgroundTransparency = 1,
+		LayoutOrder = self._rowCount,
+		Parent = self.Page,
+	}, {
+		new("UIListLayout", {
+			FillDirection = Enum.FillDirection.Horizontal,
+			Padding = UDim.new(0, 16),
+			SortOrder = Enum.SortOrder.LayoutOrder,
+		}),
+	})
+	self._rowCount += 1
+
+	local StatRow = setmetatable({ Window = self.Window, Row = Row, _count = 0 }, SugarUI)
+	return StatRow
+end
+
+function SugarUI:CreateStat(config)
+	config = config or {}
+	local container = self.Row or self.Page
+
+	local Stat = new("Frame", {
+		Size = UDim2.new(0, 108, 1, 0),
+		BackgroundTransparency = 1,
+		LayoutOrder = self._count or 0,
+		Parent = container,
+	})
+
+	local ValueLabel = new("TextLabel", {
+		Text = config.Value or "0",
+		Font = Theme.FontBold,
+		TextSize = 30,
+		TextColor3 = Theme.Accent,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 0, 36),
+		Parent = Stat,
+	})
+
+	new("TextLabel", {
+		Text = config.Label or "",
+		Font = Theme.Font,
+		TextSize = 13,
+		TextColor3 = Theme.TextDim,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextWrapped = true,
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 0, 32),
+		Position = UDim2.new(0, 0, 0, 34),
+		Parent = Stat,
+	})
+
+	if self._count ~= nil then
+		self._count += 1
+	end
+
+	local StatController = setmetatable({ ValueLabel = ValueLabel, Value = config.Value or "0" }, SugarUI)
+
+	-- :Set(valor) permite refrescar la estadística en vivo desde tu propio
+	-- script (ej: actualizar "jugadores en línea" cada pocos segundos).
+	function StatController:Set(newValue)
+		self.Value = newValue
+		ValueLabel.Text = tostring(newValue)
+	end
+
+	registerFlag(config.Flag, StatController, config.Value)
+	return StatController
+end
+
+function SugarUI:CreateSectionLabel(text)
+	new("TextLabel", {
+		Text = text,
+		Font = Theme.FontSemibold,
+		TextSize = 12,
+		TextColor3 = Theme.TextFaint,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 0, 18),
+		LayoutOrder = self._rowCount,
+		Parent = self.Page,
+	})
+	self._rowCount += 1
+end
+
+-- ============================================================
+-- 	ACCESO RÁPIDO — ahora ejecuta lógica real de forma segura
+-- ============================================================
+function SugarUI:CreateQuickAccess(config)
+	config = config or {}
+	local callback = config.Callback or function() end
+
+	local Card = new("Frame", {
+		Size = UDim2.new(1, 0, 0, 84),
+		BackgroundColor3 = Theme.Panel,
+		BackgroundTransparency = Theme.PanelTransparency,
+		LayoutOrder = self._rowCount,
+		Parent = self.Page,
+	}, { corner(18), stroke(Theme.Stroke, 1), pad(16) })
+	self._rowCount += 1
+
+	new("TextLabel", {
+		Text = config.Icon or "•",
+		Font = Theme.FontBold,
+		TextSize = 15,
+		TextColor3 = Theme.Text,
+		BackgroundColor3 = Theme.PanelAlt,
+		Size = UDim2.new(0, 34, 0, 34),
+		Parent = Card,
+	}, { corner(17) })
+
+	new("TextLabel", {
+		Text = config.Title or "Acceso",
+		Font = Theme.FontSemibold,
+		TextSize = 16,
+		TextColor3 = Theme.Text,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, -50, 0, 20),
+		Position = UDim2.new(0, 50, 0, 6),
+		Parent = Card,
+	})
+
+	local ClickOverlay = new("TextButton", {
+		Text = "",
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 1, 0),
+		Parent = Card,
+	})
+
+	local QuickAccess = setmetatable({ Card = Card, Callback = callback }, SugarUI)
+
+	-- :Set() dispara la lógica conectada como si se hubiera hecho click.
+	function QuickAccess:Set(...)
+		safeCall(self.Callback, ...)
+	end
+
+	table.insert(self.Window._connections, ClickOverlay.MouseButton1Click:Connect(function()
+		QuickAccess:Set()
+	end))
+	hoverTint(Card, Theme.Panel, Theme.PanelAlt)
+
+	registerFlag(config.Flag, QuickAccess, nil)
+	return QuickAccess
+end
+
+-- ============================================================
+-- 	BOTÓN
+-- ============================================================
 function SugarUI:CreateButton(config)
 	config = config or {}
 	local callback = config.Callback or function() end
@@ -552,10 +958,10 @@ function SugarUI:CreateButton(config)
 		TextColor3 = Theme.Text,
 		AutoButtonColor = false,
 		BackgroundColor3 = Theme.Accent,
-		Size = UDim2.new(1, 0, 0, 38),
+		Size = UDim2.new(0, 160, 0, 40),
 		LayoutOrder = self._rowCount,
 		Parent = self.Page,
-	}, { corner(12), accentGradient(), stroke(Theme.Stroke, 1) })
+	}, { corner(20), accentGradient() })
 	self._rowCount += 1
 
 	hoverTint(Btn, Theme.Accent, Theme.AccentDim)
@@ -563,8 +969,6 @@ function SugarUI:CreateButton(config)
 
 	local Button = setmetatable({ Instance = Btn, Callback = callback }, SugarUI)
 
-	-- :Set() en un botón simplemente dispara el callback como si se
-	-- hubiera hecho click — útil para automatizar clicks desde otro script.
 	function Button:Set(...)
 		safeCall(self.Callback, ...)
 	end
@@ -577,7 +981,9 @@ function SugarUI:CreateButton(config)
 	return Button
 end
 
--- ---------------- Toggle ----------------
+-- ============================================================
+-- 	TOGGLE
+-- ============================================================
 function SugarUI:CreateToggle(config)
 	config = config or {}
 	local callback = config.Callback or function() end
@@ -589,7 +995,7 @@ function SugarUI:CreateToggle(config)
 		BackgroundTransparency = Theme.PanelTransparency,
 		LayoutOrder = self._rowCount,
 		Parent = self.Page,
-	}, { corner(14), stroke(Theme.Stroke, 1), pad(0, 0, 16, 0, 16) })
+	}, { corner(16), stroke(Theme.Stroke, 1), pad(0, 0, 16, 0, 16) })
 	self._rowCount += 1
 
 	new("TextLabel", {
@@ -617,19 +1023,18 @@ function SugarUI:CreateToggle(config)
 		Parent = Track,
 	}, { corner(8) })
 
-	local ClickOverlay = new("TextButton", { Text = "", BackgroundTransparency = 1, Size = UDim2.new(1, 0, 1, 0), Parent = Row })
+	local ClickOverlay = new("TextButton", { Text = "", BackgroundTransparency = 1, Size = UDim2.new(1,0,1,0), Parent = Row })
 
 	local Toggle = setmetatable({ Track = Track, Knob = Knob, Value = state, Callback = callback }, SugarUI)
 
-	-- Actualiza SOLO la interfaz (sin disparar callback) — usado internamente
 	local function paint(newState)
 		TweenService:Create(Track, TweenInfo.new(0.15), { BackgroundColor3 = newState and Theme.Accent or Theme.PanelAlt }):Play()
 		TweenService:Create(Knob, TweenInfo.new(0.15), { Position = newState and UDim2.new(1, -19, 0.5, -8) or UDim2.new(0, 3, 0.5, -8) }):Play()
 	end
 
 	-- :Set(bool) actualiza la UI Y dispara la lógica externa conectada.
-	-- Puede llamarse desde CUALQUIER script externo (ej: en un bucle Auto-M1
-	-- que decide desactivarse solo tras cierta condición).
+	-- Se puede llamar desde CUALQUIER script (ej: un bucle Auto-M1 que se
+	-- desactiva solo tras cierta condición).
 	function Toggle:Set(newState)
 		newState = not not newState
 		self.Value = newState
@@ -646,7 +1051,9 @@ function SugarUI:CreateToggle(config)
 	return Toggle
 end
 
--- ---------------- Slider ----------------
+-- ============================================================
+-- 	SLIDER
+-- ============================================================
 function SugarUI:CreateSlider(config)
 	config = config or {}
 	local callback = config.Callback or function() end
@@ -655,43 +1062,43 @@ function SugarUI:CreateSlider(config)
 	local value = math.clamp(config.Default or min, min, max)
 
 	local Row = new("Frame", {
-		Size = UDim2.new(1, 0, 0, 50),
+		Size = UDim2.new(1, 0, 0, 56),
 		BackgroundColor3 = Theme.Panel,
 		BackgroundTransparency = Theme.PanelTransparency,
 		LayoutOrder = self._rowCount,
 		Parent = self.Page,
-	}, { corner(14), stroke(Theme.Stroke, 1), pad(0, 10, 14, 10, 14) })
+	}, { corner(16), stroke(Theme.Stroke, 1), pad(0, 10, 16, 10, 16) })
 	self._rowCount += 1
 
 	new("TextLabel", {
 		Text = config.Text or "Valor",
 		Font = Theme.Font,
-		TextSize = 13,
+		TextSize = 14,
 		TextColor3 = Theme.Text,
 		TextXAlignment = Enum.TextXAlignment.Left,
 		BackgroundTransparency = 1,
-		Size = UDim2.new(1, -46, 0, 16),
+		Size = UDim2.new(1, -50, 0, 18),
 		Parent = Row,
 	})
 
 	local ValueLabel = new("TextLabel", {
 		Text = tostring(value),
 		Font = Theme.FontSemibold,
-		TextSize = 12,
+		TextSize = 13,
 		TextColor3 = Theme.Accent,
 		TextXAlignment = Enum.TextXAlignment.Right,
 		BackgroundTransparency = 1,
-		Size = UDim2.new(0, 46, 0, 16),
-		Position = UDim2.new(1, -46, 0, 0),
+		Size = UDim2.new(0, 50, 0, 18),
+		Position = UDim2.new(1, -50, 0, 0),
 		Parent = Row,
 	})
 
 	local Track = new("Frame", {
-		Size = UDim2.new(1, 0, 0, 5),
-		Position = UDim2.new(0, 0, 0, 28),
+		Size = UDim2.new(1, 0, 0, 8),
+		Position = UDim2.new(0, 0, 0, 30),
 		BackgroundColor3 = Theme.PanelAlt,
 		Parent = Row,
-	}, { corner(3) })
+	}, { corner(4) })
 
 	local function ratio(v)
 		return (v - min) / math.max(max - min, 1e-6)
@@ -701,26 +1108,26 @@ function SugarUI:CreateSlider(config)
 		Size = UDim2.new(ratio(value), 0, 1, 0),
 		BackgroundColor3 = Theme.Accent,
 		Parent = Track,
-	}, { corner(3) })
+	}, { corner(4) })
 
 	local Knob = new("Frame", {
-		Size = UDim2.new(0, 12, 0, 12),
-		Position = UDim2.new(ratio(value), -6, 0.5, -6),
+		Size = UDim2.new(0, 14, 0, 14),
+		Position = UDim2.new(ratio(value), -7, 0.5, -7),
 		BackgroundColor3 = Theme.Text,
 		Parent = Track,
-	}, { corner(6), stroke(Theme.Stroke, 1) })
+	}, { corner(7) })
 
 	local Slider = setmetatable({ Track = Track, Fill = Fill, Knob = Knob, Value = value, Callback = callback }, SugarUI)
 
 	local function paint(v)
 		local r = ratio(v)
 		Fill.Size = UDim2.new(r, 0, 1, 0)
-		Knob.Position = UDim2.new(r, -6, 0.5, -6)
+		Knob.Position = UDim2.new(r, -7, 0.5, -7)
 		ValueLabel.Text = tostring(v)
 	end
 
-	-- :Set(number) mueve el slider Y dispara OnChange/Callback — perfecto
-	-- para que otro script ajuste, por ejemplo, la velocidad de un Auto-M1.
+	-- :Set(number) mueve el slider Y dispara la lógica externa — útil para
+	-- ajustar, por ejemplo, la velocidad de un Auto-M1 desde otro script.
 	function Slider:Set(newValue)
 		newValue = math.clamp(math.floor(newValue + 0.5), min, max)
 		self.Value = newValue
@@ -759,7 +1166,9 @@ function SugarUI:CreateSlider(config)
 	return Slider
 end
 
--- ---------------- Dropdown ----------------
+-- ============================================================
+-- 	DROPDOWN
+-- ============================================================
 function SugarUI:CreateDropdown(config)
 	config = config or {}
 	local callback = config.Callback or function() end
@@ -774,7 +1183,7 @@ function SugarUI:CreateDropdown(config)
 		ClipsDescendants = false,
 		ZIndex = 2,
 		Parent = self.Page,
-	}, { corner(14), stroke(Theme.Stroke, 1), pad(0, 0, 14, 0, 14) })
+	}, { corner(16), stroke(Theme.Stroke, 1), pad(0, 0, 16, 0, 16) })
 	self._rowCount += 1
 
 	new("TextLabel", {
@@ -815,7 +1224,7 @@ function SugarUI:CreateDropdown(config)
 
 	local Dropdown = setmetatable({ Value = selected, Callback = callback, Options = options }, SugarUI)
 
-	-- :Set(option) cambia la selección Y dispara el callback — útil para
+	-- :Set(opción) cambia la selección Y dispara el callback — útil para
 	-- sincronizar el dropdown con un estado externo (ej: modo de combate).
 	function Dropdown:Set(option)
 		self.Value = option
@@ -851,7 +1260,9 @@ function SugarUI:CreateDropdown(config)
 	return Dropdown
 end
 
--- ---------------- Keybind ----------------
+-- ============================================================
+-- 	KEYBIND
+-- ============================================================
 function SugarUI:CreateKeybind(config)
 	config = config or {}
 	local callback = config.Callback or function() end
@@ -864,13 +1275,13 @@ function SugarUI:CreateKeybind(config)
 		BackgroundTransparency = Theme.PanelTransparency,
 		LayoutOrder = self._rowCount,
 		Parent = self.Page,
-	}, { corner(14), stroke(Theme.Stroke, 1), pad(0, 0, 14, 0, 14) })
+	}, { corner(16), stroke(Theme.Stroke, 1), pad(0, 0, 16, 0, 16) })
 	self._rowCount += 1
 
 	new("TextLabel", {
 		Text = config.Text or "Tecla",
 		Font = Theme.Font,
-		TextSize = 13,
+		TextSize = 14,
 		TextColor3 = Theme.Text,
 		TextXAlignment = Enum.TextXAlignment.Left,
 		BackgroundTransparency = 1,
@@ -892,8 +1303,8 @@ function SugarUI:CreateKeybind(config)
 
 	local Keybind = setmetatable({ Value = currentKey, Callback = callback }, SugarUI)
 
-	-- :Set(KeyCode) reasigna la tecla programáticamente (útil para permitir
-	-- que el usuario cargue un perfil de teclas guardado, por ejemplo).
+	-- :Set(KeyCode) reasigna la tecla programáticamente (ej: cargar un
+	-- perfil de teclas guardado).
 	function Keybind:Set(keyCode)
 		self.Value = keyCode
 		KeyButton.Text = keyCode.Name
