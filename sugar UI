@@ -1,78 +1,126 @@
 --[[
 	SugarUI
 	--------
-	Librería de UI en Luau para usar dentro de tu propio juego en Roblox
-	Studio (paneles de administración, menús de configuración, HUDs, etc.)
+	Librería de UI en Luau para Roblox, pensada para conectar CUALQUIER lógica
+	externa (bucles, toggles de habilidades, sliders de configuración, etc.)
+	de forma fluida y sin congelar el hilo principal ni la interfaz.
 
-	Arquitectura:
-	- OOP con setmetatable/__index en cada nivel: SugarUI -> Window -> Tab -> Componentes.
-	- Cada componente interactivo (Button, Toggle, Slider, Dropdown, Keybind)
-	  ejecuta su callback con `task.spawn(function() pcall(Callback, ...) end)`,
-	  así una lógica pesada o un `while true do ... task.wait() end` conectado
-	  por el usuario corre en su propio hilo y NUNCA congela la interfaz.
-	- Todos los componentes devuelven un "controlador" con `:Set(value)` para
-	  actualizar la UI y disparar el callback de forma programática (por
-	  ejemplo, para cargar una configuración guardada al abrir el panel).
-	- Si el componente define `config.Flag`, su valor se guarda automáticamente
-	  en `SugarUI.Flags[config.Flag]`, para poder leer el estado de todo el
-	  panel desde un solo lugar.
-	- El ScreenGui se parentea a `PlayerGui` (contenedor estándar dentro de
-	  Roblox Studio / tu propio juego).
+	Diferencias clave respecto a una librería "solo visual":
+
+	1. INVOCACIÓN ASÍNCRONA SEGURA
+	   Todo callback conectado por el usuario se ejecuta dentro de:
+	       task.spawn(function() pcall(Callback, ...) end)
+	   Esto significa que si el usuario mete un `while true do ... end` dentro
+	   de un Toggle, ese bucle corre en su propio hilo (task.spawn) y NUNCA
+	   bloquea el render de la UI ni el resto del juego. Si el callback lanza
+	   un error, pcall lo atrapa y se reporta con warn(), sin romper nada.
+
+	2. CALLBACKS CON VALOR POR DEFECTO
+	   config.Callback or function() end — nunca se intenta llamar nil.
+
+	3. CONTROLADORES DINÁMICOS
+	   Cada componente (Toggle, Slider, Dropdown, Keybind, Button) devuelve un
+	   objeto con :Set(...) que actualiza la UI Y dispara el callback, para
+	   que puedas controlar el panel programáticamente desde tu propio script
+	   (ej: SugarUI.Flags["AutoFarm"]:Set(true)).
+
+	4. FLAGS GLOBALES
+	   Si defines config.Flag = "NombreUnico", el controlador se guarda en
+	   SugarUI.Flags[config.Flag] y su valor actual en
+	   SugarUI.FlagValues[config.Flag], accesibles desde cualquier script.
+
+	5. LIMPIEZA DE CONEXIONES
+	   Cada Window guarda todas sus RBXScriptConnections en _connections y las
+	   desconecta en :Destroy(), evitando fugas de memoria.
 
 	Uso básico:
 
 		local SugarUI = require(script.SugarUI)
 
-		local Window = SugarUI:CreateWindow({ Title = "Panel del juego" })
-		local Tab = Window:CreateTab({ Name = "General" })
+		local Window = SugarUI:CreateWindow({ Title = "Mi Panel" })
+		local Combate = Window:CreateTab({ Name = "Combate", Icon = "C" })
 
-		local speedSlider = Tab:CreateSlider({
-			Text = "Velocidad de caminata",
-			Min = 16, Max = 100, Default = 16,
-			Flag = "WalkSpeed",
-			Callback = function(value)
-				-- tu lógica del juego aquí
+		local autoM1 = Combate:CreateToggle({
+			Text = "Auto-M1",
+			Flag = "AutoM1",
+			Callback = function(state)
+				-- Esto puede ser un bucle infinito sin miedo:
+				task.spawn(function()
+					while state and SugarUI.FlagValues["AutoM1"] do
+						-- tu lógica de combate aquí
+						task.wait(0.1)
+					end
+				end)
 			end,
 		})
 
-		-- Actualizar desde código (ej. al cargar config guardada):
-		speedSlider:Set(32)
-
-		-- Cerrar el panel y limpiar todas las conexiones:
-		Window:Destroy()
+		-- Disparar desde afuera:
+		SugarUI.Flags["AutoM1"]:Set(true)
 ]]
 
-local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
+local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 
 local SugarUI = {}
 SugarUI.__index = SugarUI
 
-SugarUI.Version = "1.0.0"
-SugarUI.Flags = {}     -- SugarUI.Flags[flagName] = valor actual del componente
-SugarUI.Windows = {}
+-- ============================================================
+-- 	PROPIEDADES DE LIBRERÍA
+-- ============================================================
+SugarUI.Version    = "1.0.0"
+SugarUI.Windows    = {}
+SugarUI.Flags      = {}   -- Flags[flagName] = controlador (con :Set, :Get, etc.)
+SugarUI.FlagValues = {}   -- FlagValues[flagName] = valor actual "crudo"
+SugarUI.Theme      = nil
+
+local function getGuiParent()
+	local ok, coreGui = pcall(function()
+		return game:GetService("CoreGui")
+	end)
+
+	if ok and coreGui then
+		local getHui = rawget(_G, "gethui")
+		if typeof(getHui) == "function" then
+			local success, hui = pcall(getHui)
+			if success and hui then
+				return hui
+			end
+		end
+	end
+
+	local player = Players.LocalPlayer or Players.PlayerAdded:Wait()
+	local playerGui = player:WaitForChild("PlayerGui")
+	return playerGui
+end
 
 -- ============================================================
--- 	TEMA
+-- 	PALETA / TEMA ("sugar" — rosa/morado dulce sobre fondo oscuro)
 -- ============================================================
 local Theme = {
-	Background   = Color3.fromRGB(24, 24, 27),
-	Panel        = Color3.fromRGB(32, 32, 36),
-	PanelAlt     = Color3.fromRGB(42, 42, 47),
-	Accent       = Color3.fromRGB(88, 101, 242),
-	AccentDim    = Color3.fromRGB(64, 74, 180),
-	Text         = Color3.fromRGB(235, 235, 240),
-	TextDim      = Color3.fromRGB(165, 165, 175),
-	Stroke       = Color3.fromRGB(55, 55, 62),
+	Background   = Color3.fromRGB(24, 18, 28),
+	Sidebar      = Color3.fromRGB(28, 21, 34),
+	Panel        = Color3.fromRGB(34, 25, 42),
+	PanelAlt     = Color3.fromRGB(44, 32, 54),
+	Accent       = Color3.fromRGB(255, 105, 180),
+	AccentDim    = Color3.fromRGB(190, 70, 135),
+	Text         = Color3.fromRGB(240, 240, 245),
+	TextDim      = Color3.fromRGB(200, 190, 205),
+	TextFaint    = Color3.fromRGB(150, 140, 160),
+	Online       = Color3.fromRGB(90, 220, 150),
+	Stroke       = Color3.fromRGB(60, 46, 72),
 	Font         = Enum.Font.GothamMedium,
 	FontBold     = Enum.Font.GothamBold,
 	FontSemibold = Enum.Font.GothamSemibold,
+
+	BackgroundTransparency = 0.15,
+	PanelTransparency       = 0.15,
 }
+
 SugarUI.Theme = Theme
 
 -- ============================================================
--- 	HELPERS
+-- 	HELPERS DE CONSTRUCCIÓN
 -- ============================================================
 local function new(class, props, children)
 	local inst = Instance.new(class)
@@ -86,7 +134,7 @@ local function new(class, props, children)
 end
 
 local function corner(radius)
-	return new("UICorner", { CornerRadius = UDim.new(0, radius or 8) })
+	return new("UICorner", { CornerRadius = UDim.new(0, radius or 10) })
 end
 
 local function stroke(color, thickness)
@@ -102,33 +150,56 @@ local function pad(all, top, right, bottom, left)
 	})
 end
 
-local function hoverTint(obj, base, hover)
-	obj.MouseEnter:Connect(function()
-		TweenService:Create(obj, TweenInfo.new(0.12), { BackgroundColor3 = hover }):Play()
+local function hoverTint(guiObject, baseColor, hoverColor)
+	guiObject.MouseEnter:Connect(function()
+		TweenService:Create(guiObject, TweenInfo.new(0.12), { BackgroundColor3 = hoverColor }):Play()
 	end)
-	obj.MouseLeave:Connect(function()
-		TweenService:Create(obj, TweenInfo.new(0.12), { BackgroundColor3 = base }):Play()
+	guiObject.MouseLeave:Connect(function()
+		TweenService:Create(guiObject, TweenInfo.new(0.12), { BackgroundColor3 = baseColor }):Play()
 	end)
 end
 
--- Ejecución asíncrona y segura de callbacks: corre en su propio hilo
--- (task.spawn) y protegido con pcall, así un error o un bucle largo dentro
--- del callback del usuario nunca congela ni rompe la interfaz.
+local function pressFeedback(guiObject)
+	guiObject.MouseButton1Down:Connect(function()
+		TweenService:Create(guiObject, TweenInfo.new(0.06), { Size = guiObject.Size - UDim2.new(0, 4, 0, 2) }):Play()
+	end)
+	local function restore()
+		TweenService:Create(guiObject, TweenInfo.new(0.08), { Size = guiObject.Size + UDim2.new(0, 4, 0, 2) }):Play()
+	end
+	guiObject.MouseButton1Up:Connect(restore)
+	guiObject.MouseLeave:Connect(restore)
+end
+
+local function accentGradient(rotation)
+	return new("UIGradient", { Color = ColorSequence.new(Theme.Accent, Theme.AccentDim), Rotation = rotation or 90 })
+end
+
+-- ============================================================
+-- 	NÚCLEO: INVOCACIÓN ASÍNCRONA SEGURA
+-- ============================================================
+-- Punto central pedido en los requisitos: cada callback conectado por el
+-- usuario corre en su PROPIO hilo (task.spawn) y está protegido con pcall.
+-- Un `while true do` dentro de un callback jamás congela la UI ni el juego.
 local function safeCall(fn, ...)
-	local args = { ... }
+	fn = fn or function() end
+	if typeof(fn) ~= "function" then return end
+
+	local args = table.pack(...)
 	task.spawn(function()
-		local ok, err = pcall(fn, table.unpack(args))
+		local ok, err = pcall(function()
+			fn(table.unpack(args, 1, args.n))
+		end)
 		if not ok then
-			warn("[SugarUI] Error en callback: " .. tostring(err))
+			warn("[SugarUI] Error en callback conectado por el usuario: " .. tostring(err))
 		end
 	end)
 end
 
--- Registra el valor de un componente en la tabla global de Flags, si tiene Flag.
-local function setFlag(flag, value)
-	if flag then
-		SugarUI.Flags[flag] = value
-	end
+-- Registra un valor bajo un Flag global, si se proporcionó uno.
+local function registerFlag(flagName, controller, initialValue)
+	if not flagName then return end
+	SugarUI.Flags[flagName] = controller
+	SugarUI.FlagValues[flagName] = initialValue
 end
 
 -- ============================================================
@@ -137,93 +208,252 @@ end
 function SugarUI:CreateWindow(config)
 	config = config or {}
 
-	local player = Players.LocalPlayer or Players.PlayerAdded:Wait()
-	local playerGui = player:WaitForChild("PlayerGui")
-
 	local ScreenGui = new("ScreenGui", {
 		Name = config.Title or "SugarUI",
 		ResetOnSpawn = false,
 		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
-		Parent = playerGui,
+		DisplayOrder = 999,
+		IgnoreGuiInset = true,
 	})
 
+	local protectGui = rawget(_G, "protectgui") or rawget(_G, "protect_gui")
+	if typeof(protectGui) == "function" then
+		pcall(protectGui, ScreenGui)
+	end
+
+	ScreenGui.Parent = getGuiParent()
+
 	local Root = new("Frame", {
-		Size = config.Size or UDim2.new(0, 560, 0, 380),
-		Position = config.Position or UDim2.new(0.5, -280, 0.5, -190),
-		BackgroundColor3 = Theme.Background,
+		Name = "Root",
+		Size = config.Size or UDim2.new(0, 640, 0, 440),
+		Position = config.Position or UDim2.new(0.5, -320, 0.5, -220),
+		BackgroundColor3 = config.BackgroundColor or Theme.Background,
+		BackgroundTransparency = config.BackgroundTransparency or Theme.BackgroundTransparency,
 		ClipsDescendants = true,
 		Parent = ScreenGui,
-	}, { corner(14), stroke(Theme.Stroke, 1) })
+	}, { corner(22), stroke(Theme.Stroke, 1) })
 
+	local MARGIN = 12
+	local GAP = 10
+	local TOPBAR_H = 54
+	local SIDEBAR_W = 190
+	local ROW_Y = MARGIN + TOPBAR_H + GAP
+
+	-- ---------------- Barra superior ----------------
 	local TopBar = new("Frame", {
-		Size = UDim2.new(1, 0, 0, 42),
-		BackgroundColor3 = Theme.Panel,
+		Name = "TopBar",
+		Size = UDim2.new(1, -MARGIN * 2, 0, TOPBAR_H),
+		Position = UDim2.new(0, MARGIN, 0, MARGIN),
+		BackgroundColor3 = Theme.Sidebar,
+		BackgroundTransparency = Theme.PanelTransparency,
 		Parent = Root,
-	}, { corner(14) })
+	}, { corner(16), stroke(Theme.Stroke, 1) })
 
 	new("TextLabel", {
-		Text = config.Title or "SugarUI",
+		Text = config.Title or "Panel",
 		Font = Theme.FontBold,
-		TextSize = 15,
+		TextSize = 17,
 		TextColor3 = Theme.Text,
 		TextXAlignment = Enum.TextXAlignment.Left,
 		BackgroundTransparency = 1,
-		Size = UDim2.new(1, -20, 1, 0),
-		Position = UDim2.new(0, 16, 0, 0),
+		Size = UDim2.new(0, 220, 0, 20),
+		Position = UDim2.new(0, 18, 0.5, -10),
 		Parent = TopBar,
 	})
 
-	local TabBar = new("Frame", {
-		Name = "TabBar",
-		Size = UDim2.new(0, 140, 1, -54),
-		Position = UDim2.new(0, 8, 0, 50),
-		BackgroundColor3 = Theme.Panel,
-		Parent = Root,
-	}, { corner(10) })
+	local MinimizeBtn = new("TextButton", {
+		Text = "—",
+		Font = Theme.FontBold,
+		TextSize = 14,
+		TextColor3 = Theme.Text,
+		AutoButtonColor = false,
+		BackgroundColor3 = Theme.Accent,
+		Size = UDim2.new(0, 32, 0, 32),
+		Position = UDim2.new(1, -80, 0.5, -16),
+		Parent = TopBar,
+	}, { corner(16), accentGradient() })
 
-	local TabList = new("ScrollingFrame", {
-		Size = UDim2.new(1, -8, 1, -8),
-		Position = UDim2.new(0, 4, 0, 4),
+	local CloseBtn = new("TextButton", {
+		Text = "✕",
+		Font = Theme.FontBold,
+		TextSize = 14,
+		TextColor3 = Theme.Text,
+		AutoButtonColor = false,
+		BackgroundColor3 = Theme.Accent,
+		Size = UDim2.new(0, 32, 0, 32),
+		Position = UDim2.new(1, -40, 0.5, -16),
+		Parent = TopBar,
+	}, { corner(16), accentGradient() })
+
+	hoverTint(MinimizeBtn, Theme.Accent, Theme.AccentDim)
+	hoverTint(CloseBtn, Theme.Accent, Theme.AccentDim)
+	pressFeedback(MinimizeBtn)
+	pressFeedback(CloseBtn)
+
+	-- ---------------- Sidebar ----------------
+	local Sidebar = new("Frame", {
+		Name = "Sidebar",
+		Size = UDim2.new(0, SIDEBAR_W, 1, -(ROW_Y + MARGIN)),
+		Position = UDim2.new(0, MARGIN, 0, ROW_Y),
+		BackgroundColor3 = Theme.Sidebar,
+		BackgroundTransparency = Theme.PanelTransparency,
+		Parent = Root,
+	}, { corner(16), stroke(Theme.Stroke, 1) })
+
+	local SidebarList = new("ScrollingFrame", {
+		Name = "SidebarList",
+		Size = UDim2.new(1, 0, 1, 0),
 		BackgroundTransparency = 1,
 		ScrollBarThickness = 3,
+		ScrollBarImageColor3 = Theme.Stroke,
 		CanvasSize = UDim2.new(0, 0, 0, 0),
 		AutomaticCanvasSize = Enum.AutomaticSize.Y,
-		Parent = TabBar,
+		Parent = Sidebar,
 	}, {
 		new("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }),
+		pad(0, 16, 16, 16, 16),
 	})
 
-	local PageHolder = new("Frame", {
-		Name = "PageHolder",
-		Size = UDim2.new(1, -164, 1, -54),
-		Position = UDim2.new(0, 156, 0, 50),
+	-- ---------------- Área de contenido ----------------
+	local Content = new("Frame", {
+		Name = "Content",
+		Size = UDim2.new(1, -(MARGIN + SIDEBAR_W + GAP + MARGIN), 1, -(ROW_Y + MARGIN)),
+		Position = UDim2.new(0, MARGIN + SIDEBAR_W + GAP, 0, ROW_Y),
 		BackgroundColor3 = Theme.Panel,
+		BackgroundTransparency = Theme.PanelTransparency,
 		Parent = Root,
-	}, { corner(10) })
+	}, { corner(16), stroke(Theme.Stroke, 1) })
+
+	local ContentScroll = new("ScrollingFrame", {
+		Size = UDim2.new(1, 0, 1, 0),
+		BackgroundTransparency = 1,
+		ScrollBarThickness = 3,
+		ScrollBarImageColor3 = Theme.Stroke,
+		CanvasSize = UDim2.new(0, 0, 0, 0),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		Parent = Content,
+	}, {
+		new("UIListLayout", { Padding = UDim.new(0, 16), SortOrder = Enum.SortOrder.LayoutOrder }),
+		pad(0, 20, 20, 20, 20),
+	})
+
+	-- ---------------- Burbuja flotante ----------------
+	local Bubble = new("TextButton", {
+		Name = "Bubble",
+		Text = "🍬",
+		Font = Theme.FontBold,
+		TextSize = 20,
+		AutoButtonColor = false,
+		Size = UDim2.new(0, 50, 0, 50),
+		Position = UDim2.new(1, -80, 1, -80),
+		BackgroundColor3 = Theme.Accent,
+		Visible = false,
+		Parent = ScreenGui,
+	}, { corner(25), stroke(Theme.Stroke, 1), accentGradient(135) })
+
+	hoverTint(Bubble, Theme.Accent, Theme.AccentDim)
 
 	local Window = setmetatable({
 		ScreenGui = ScreenGui,
 		Root = Root,
-		TabList = TabList,
-		PageHolder = PageHolder,
+		Sidebar = Sidebar,
+		SidebarList = SidebarList,
+		Content = Content,
+		ContentScroll = ContentScroll,
+		Bubble = Bubble,
 		_tabs = {},
-		_connections = {},   -- todas las conexiones de eventos de esta ventana
-	}, { __index = SugarUI })
+		_connections = {},
+	}, SugarUI)
+
+	local function track(conn)
+		table.insert(Window._connections, conn)
+		return conn
+	end
+
+	track(Bubble.MouseButton1Click:Connect(function()
+		Window:Show()
+	end))
+
+	track(MinimizeBtn.MouseButton1Click:Connect(function()
+		Window:Hide()
+		safeCall(Window.OnMinimize)
+	end))
+
+	track(CloseBtn.MouseButton1Click:Connect(function()
+		Window:Hide()
+		safeCall(Window.OnClose)
+	end))
+
+	-- ---------------- Arrastrar ventana ----------------
+	do
+		local dragging = false
+		local dragStart, startPos
+
+		track(TopBar.InputBegan:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1
+				or input.UserInputType == Enum.UserInputType.Touch then
+				dragging = true
+				dragStart = input.Position
+				startPos = Root.Position
+				input.Changed:Connect(function()
+					if input.UserInputState == Enum.UserInputState.End then
+						dragging = false
+					end
+				end)
+			end
+		end))
+
+		track(UserInputService.InputChanged:Connect(function(input)
+			if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+				or input.UserInputType == Enum.UserInputType.Touch) then
+				local delta = input.Position - dragStart
+				Root.Position = UDim2.new(
+					startPos.X.Scale, startPos.X.Offset + delta.X,
+					startPos.Y.Scale, startPos.Y.Offset + delta.Y
+				)
+			end
+		end))
+	end
+
+	-- ---------------- Atajo de teclado (por defecto K) ----------------
+	local toggleKey = config.ToggleKey or Enum.KeyCode.K
+	track(UserInputService.InputBegan:Connect(function(input, gameProcessed)
+		if gameProcessed then return end
+		if input.KeyCode == toggleKey then
+			Window:Toggle()
+		end
+	end))
 
 	table.insert(SugarUI.Windows, Window)
 	return Window
 end
 
--- Desconecta todas las conexiones registradas por la ventana y sus
--- componentes, y destruye la interfaz. Úsalo al cerrar el panel para
--- evitar fugas de memoria.
-function SugarUI.Window_Destroy(self)
-	for _, conn in ipairs(self._connections) do
-		if typeof(conn) == "RBXScriptConnection" and conn.Connected then
-			conn:Disconnect()
+-- ------------------------------------------------------------
+-- 	Métodos de ventana
+-- ------------------------------------------------------------
+function SugarUI:Show()
+	self.Root.Visible = true
+	if self.Bubble then self.Bubble.Visible = false end
+end
+
+function SugarUI:Hide()
+	self.Root.Visible = false
+	if self.Bubble then self.Bubble.Visible = true end
+end
+
+function SugarUI:Toggle()
+	if self.Root.Visible then self:Hide() else self:Show() end
+end
+
+-- Limpieza de eventos: desconecta TODAS las conexiones guardadas en
+-- _connections (arrastre, atajos de teclado, clicks de tabs/elementos, etc.)
+-- y destruye la instancia. Evita fugas de memoria si el panel se recrea.
+function SugarUI:Destroy()
+	if self._connections then
+		for _, conn in ipairs(self._connections) do
+			pcall(function() conn:Disconnect() end)
 		end
 	end
-	table.clear(self._connections)
 	if self.ScreenGui then
 		self.ScreenGui:Destroy()
 	end
@@ -238,32 +468,45 @@ end
 -- ============================================================
 -- 	CREATE TAB
 -- ============================================================
-function SugarUI.Window_CreateTab(self, config)
+function SugarUI:CreateTab(config)
 	config = config or {}
+
 	local isFirst = #self._tabs == 0
 
 	local TabButton = new("TextButton", {
-		Text = config.Name or "Tab",
-		Font = Theme.FontSemibold,
-		TextSize = 13,
-		TextColor3 = Theme.Text,
+		Name = config.Name,
+		Text = "",
 		AutoButtonColor = false,
-		BackgroundColor3 = isFirst and Theme.Accent or Theme.PanelAlt,
-		Size = UDim2.new(1, 0, 0, 34),
-		Parent = self.TabList,
-	}, { corner(8) })
+		BackgroundColor3 = isFirst and Theme.Accent or Theme.Sidebar,
+		Size = UDim2.new(1, 0, 0, 40),
+		Parent = self.SidebarList,
+	}, isFirst and { corner(14), accentGradient() } or { corner(14) })
 
-	local Page = new("ScrollingFrame", {
-		Size = UDim2.new(1, -16, 1, -16),
-		Position = UDim2.new(0, 8, 0, 8),
+	new("TextLabel", {
+		Text = (config.Icon and (config.Icon .. "  ") or "") .. (config.Name or "Tab"),
+		Font = Theme.FontSemibold,
+		TextSize = 14,
+		TextColor3 = Theme.Text,
+		TextXAlignment = Enum.TextXAlignment.Left,
 		BackgroundTransparency = 1,
-		ScrollBarThickness = 3,
-		CanvasSize = UDim2.new(0, 0, 0, 0),
-		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		Size = UDim2.new(1, -24, 1, 0),
+		Position = UDim2.new(0, 14, 0, 0),
+		Parent = TabButton,
+	})
+
+	if not isFirst then
+		hoverTint(TabButton, Theme.Sidebar, Theme.PanelAlt)
+	end
+
+	local Page = new("Frame", {
+		Name = (config.Name or "Tab") .. "Page",
+		Size = UDim2.new(1, 0, 0, 0),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		BackgroundTransparency = 1,
 		Visible = isFirst,
-		Parent = self.PageHolder,
+		Parent = self.ContentScroll,
 	}, {
-		new("UIListLayout", { Padding = UDim.new(0, 10), SortOrder = Enum.SortOrder.LayoutOrder }),
+		new("UIListLayout", { Padding = UDim.new(0, 12), SortOrder = Enum.SortOrder.LayoutOrder }),
 	})
 
 	local Tab = setmetatable({
@@ -271,154 +514,153 @@ function SugarUI.Window_CreateTab(self, config)
 		Button = TabButton,
 		Page = Page,
 		_rowCount = 0,
-	}, { __index = SugarUI })
+	}, SugarUI)
 
-	local conn = TabButton.MouseButton1Click:Connect(function()
+	table.insert(self._connections, TabButton.MouseButton1Click:Connect(function()
 		for _, t in ipairs(self._tabs) do
 			t.Page.Visible = false
-			t.Button.BackgroundColor3 = Theme.PanelAlt
+			t.Button.BackgroundColor3 = Theme.Sidebar
 		end
 		Page.Visible = true
 		TabButton.BackgroundColor3 = Theme.Accent
-	end)
-	table.insert(self._connections, conn)
-
-	if not isFirst then
-		hoverTint(TabButton, Theme.PanelAlt, Theme.Accent)
-	end
+		safeCall(Tab.OnSelect)
+	end))
 
 	table.insert(self._tabs, Tab)
 	return Tab
 end
 
 -- ============================================================
--- 	BUTTON
+-- 	COMPONENTES INTERACTIVOS
+--
+-- 	Cada uno sigue el mismo patrón:
+-- 	  1. config.Callback or function() end   (nunca nil)
+-- 	  2. safeCall(...) -> task.spawn + pcall, nunca congela nada
+-- 	  3. Se devuelve un controlador con :Set(...) para uso programático
+-- 	  4. Si hay config.Flag, se registra en SugarUI.Flags / FlagValues
 -- ============================================================
-function SugarUI.Tab_CreateButton(self, config)
+
+-- ---------------- Button ----------------
+function SugarUI:CreateButton(config)
 	config = config or {}
-	local Callback = config.Callback or function() end
+	local callback = config.Callback or function() end
 
 	local Btn = new("TextButton", {
 		Text = config.Text or "Botón",
 		Font = Theme.FontSemibold,
-		TextSize = 13,
+		TextSize = 14,
 		TextColor3 = Theme.Text,
 		AutoButtonColor = false,
 		BackgroundColor3 = Theme.Accent,
-		Size = UDim2.new(1, 0, 0, 36),
+		Size = UDim2.new(1, 0, 0, 38),
 		LayoutOrder = self._rowCount,
 		Parent = self.Page,
-	}, { corner(8) })
+	}, { corner(12), accentGradient(), stroke(Theme.Stroke, 1) })
 	self._rowCount += 1
 
 	hoverTint(Btn, Theme.Accent, Theme.AccentDim)
+	pressFeedback(Btn)
 
-	local conn = Btn.MouseButton1Click:Connect(function()
-		safeCall(Callback)
-	end)
-	table.insert(self.Window._connections, conn)
+	local Button = setmetatable({ Instance = Btn, Callback = callback }, SugarUI)
 
-	local Controller = {
-		Instance = Btn,
-		-- :Set() en un botón simplemente vuelve a disparar su acción,
-		-- útil para invocarlo programáticamente (ej. desde un keybind).
-		Set = function(_self)
-			safeCall(Callback)
-		end,
-	}
-	return Controller
+	-- :Set() en un botón simplemente dispara el callback como si se
+	-- hubiera hecho click — útil para automatizar clicks desde otro script.
+	function Button:Set(...)
+		safeCall(self.Callback, ...)
+	end
+
+	table.insert(self.Window._connections, Btn.MouseButton1Click:Connect(function()
+		Button:Set()
+	end))
+
+	registerFlag(config.Flag, Button, nil)
+	return Button
 end
 
--- ============================================================
--- 	TOGGLE
--- ============================================================
-function SugarUI.Tab_CreateToggle(self, config)
+-- ---------------- Toggle ----------------
+function SugarUI:CreateToggle(config)
 	config = config or {}
-	local Callback = config.Callback or function() end
+	local callback = config.Callback or function() end
 	local state = config.Default or false
-	setFlag(config.Flag, state)
 
 	local Row = new("Frame", {
-		Size = UDim2.new(1, 0, 0, 38),
-		BackgroundColor3 = Theme.PanelAlt,
+		Size = UDim2.new(1, 0, 0, 44),
+		BackgroundColor3 = Theme.Panel,
+		BackgroundTransparency = Theme.PanelTransparency,
 		LayoutOrder = self._rowCount,
 		Parent = self.Page,
-	}, { corner(8), pad(0, 0, 12, 0, 12) })
+	}, { corner(14), stroke(Theme.Stroke, 1), pad(0, 0, 16, 0, 16) })
 	self._rowCount += 1
 
 	new("TextLabel", {
 		Text = config.Text or "Opción",
 		Font = Theme.Font,
-		TextSize = 13,
+		TextSize = 14,
 		TextColor3 = Theme.Text,
 		TextXAlignment = Enum.TextXAlignment.Left,
 		BackgroundTransparency = 1,
-		Size = UDim2.new(1, -50, 1, 0),
+		Size = UDim2.new(1, -60, 1, 0),
 		Parent = Row,
 	})
 
 	local Track = new("Frame", {
-		Size = UDim2.new(0, 38, 0, 20),
-		Position = UDim2.new(1, -38, 0.5, -10),
-		BackgroundColor3 = state and Theme.Accent or Theme.Panel,
+		Size = UDim2.new(0, 42, 0, 22),
+		Position = UDim2.new(1, -42, 0.5, -11),
+		BackgroundColor3 = state and Theme.Accent or Theme.PanelAlt,
 		Parent = Row,
-	}, { corner(10), stroke(Theme.Stroke, 1) })
+	}, { corner(11), stroke(Theme.Stroke, 1) })
 
 	local Knob = new("Frame", {
-		Size = UDim2.new(0, 14, 0, 14),
-		Position = state and UDim2.new(1, -17, 0.5, -7) or UDim2.new(0, 3, 0.5, -7),
+		Size = UDim2.new(0, 16, 0, 16),
+		Position = state and UDim2.new(1, -19, 0.5, -8) or UDim2.new(0, 3, 0.5, -8),
 		BackgroundColor3 = Theme.Text,
 		Parent = Track,
-	}, { corner(7) })
+	}, { corner(8) })
 
-	local Overlay = new("TextButton", { Text = "", BackgroundTransparency = 1, Size = UDim2.new(1, 0, 1, 0), Parent = Row })
+	local ClickOverlay = new("TextButton", { Text = "", BackgroundTransparency = 1, Size = UDim2.new(1, 0, 1, 0), Parent = Row })
 
-	local Controller
+	local Toggle = setmetatable({ Track = Track, Knob = Knob, Value = state, Callback = callback }, SugarUI)
 
-	local function apply(newState, fireCallback)
-		state = newState
-		setFlag(config.Flag, state)
-		TweenService:Create(Track, TweenInfo.new(0.15), { BackgroundColor3 = state and Theme.Accent or Theme.Panel }):Play()
-		TweenService:Create(Knob, TweenInfo.new(0.15), { Position = state and UDim2.new(1, -17, 0.5, -7) or UDim2.new(0, 3, 0.5, -7) }):Play()
-		if fireCallback then
-			safeCall(Callback, state)
-		end
+	-- Actualiza SOLO la interfaz (sin disparar callback) — usado internamente
+	local function paint(newState)
+		TweenService:Create(Track, TweenInfo.new(0.15), { BackgroundColor3 = newState and Theme.Accent or Theme.PanelAlt }):Play()
+		TweenService:Create(Knob, TweenInfo.new(0.15), { Position = newState and UDim2.new(1, -19, 0.5, -8) or UDim2.new(0, 3, 0.5, -8) }):Play()
 	end
 
-	local conn = Overlay.MouseButton1Click:Connect(function()
-		apply(not state, true)
-	end)
-	table.insert(self.Window._connections, conn)
+	-- :Set(bool) actualiza la UI Y dispara la lógica externa conectada.
+	-- Puede llamarse desde CUALQUIER script externo (ej: en un bucle Auto-M1
+	-- que decide desactivarse solo tras cierta condición).
+	function Toggle:Set(newState)
+		newState = not not newState
+		self.Value = newState
+		paint(newState)
+		SugarUI.FlagValues[config.Flag] = newState
+		safeCall(self.Callback, newState)
+	end
 
-	Controller = {
-		Track = Track,
-		Knob = Knob,
-		-- :Set(true/false) actualiza la interfaz Y dispara el callback,
-		-- para poder controlar el toggle desde código externo.
-		Set = function(_self, value)
-			apply(value, true)
-		end,
-	}
-	return Controller
+	table.insert(self.Window._connections, ClickOverlay.MouseButton1Click:Connect(function()
+		Toggle:Set(not Toggle.Value)
+	end))
+
+	registerFlag(config.Flag, Toggle, state)
+	return Toggle
 end
 
--- ============================================================
--- 	SLIDER
--- ============================================================
-function SugarUI.Tab_CreateSlider(self, config)
+-- ---------------- Slider ----------------
+function SugarUI:CreateSlider(config)
 	config = config or {}
-	local Callback = config.Callback or function() end
+	local callback = config.Callback or function() end
 	local min = config.Min or 0
 	local max = config.Max or 100
 	local value = math.clamp(config.Default or min, min, max)
-	setFlag(config.Flag, value)
 
 	local Row = new("Frame", {
-		Size = UDim2.new(1, 0, 0, 46),
-		BackgroundColor3 = Theme.PanelAlt,
+		Size = UDim2.new(1, 0, 0, 50),
+		BackgroundColor3 = Theme.Panel,
+		BackgroundTransparency = Theme.PanelTransparency,
 		LayoutOrder = self._rowCount,
 		Parent = self.Page,
-	}, { corner(8), pad(0, 8, 12, 8, 12) })
+	}, { corner(14), stroke(Theme.Stroke, 1), pad(0, 10, 14, 10, 14) })
 	self._rowCount += 1
 
 	new("TextLabel", {
@@ -446,8 +688,8 @@ function SugarUI.Tab_CreateSlider(self, config)
 
 	local Track = new("Frame", {
 		Size = UDim2.new(1, 0, 0, 5),
-		Position = UDim2.new(0, 0, 0, 26),
-		BackgroundColor3 = Theme.Panel,
+		Position = UDim2.new(0, 0, 0, 28),
+		BackgroundColor3 = Theme.PanelAlt,
 		Parent = Row,
 	}, { corner(3) })
 
@@ -466,91 +708,74 @@ function SugarUI.Tab_CreateSlider(self, config)
 		Position = UDim2.new(ratio(value), -6, 0.5, -6),
 		BackgroundColor3 = Theme.Text,
 		Parent = Track,
-	}, { corner(6) })
+	}, { corner(6), stroke(Theme.Stroke, 1) })
 
-	local Controller
-	local dragging = false
+	local Slider = setmetatable({ Track = Track, Fill = Fill, Knob = Knob, Value = value, Callback = callback }, SugarUI)
 
-	local function apply(newValue, fireCallback)
-		newValue = math.clamp(math.floor(newValue + 0.5), min, max)
-		value = newValue
-		setFlag(config.Flag, value)
-		local r = ratio(value)
+	local function paint(v)
+		local r = ratio(v)
 		Fill.Size = UDim2.new(r, 0, 1, 0)
 		Knob.Position = UDim2.new(r, -6, 0.5, -6)
-		ValueLabel.Text = tostring(value)
-		if fireCallback then
-			safeCall(Callback, value)
-		end
+		ValueLabel.Text = tostring(v)
 	end
 
+	-- :Set(number) mueve el slider Y dispara OnChange/Callback — perfecto
+	-- para que otro script ajuste, por ejemplo, la velocidad de un Auto-M1.
+	function Slider:Set(newValue)
+		newValue = math.clamp(math.floor(newValue + 0.5), min, max)
+		self.Value = newValue
+		paint(newValue)
+		SugarUI.FlagValues[config.Flag] = newValue
+		safeCall(self.Callback, newValue)
+	end
+
+	local dragging = false
 	local function setFromX(xPos)
 		local relative = math.clamp((xPos - Track.AbsolutePosition.X) / Track.AbsoluteSize.X, 0, 1)
-		apply(min + relative * (max - min), true)
+		Slider:Set(min + relative * (max - min))
 	end
 
-	local conn1 = Track.InputBegan:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+	table.insert(self.Window._connections, Track.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch then
 			dragging = true
 			setFromX(input.Position.X)
+			input.Changed:Connect(function()
+				if input.UserInputState == Enum.UserInputState.End then
+					dragging = false
+				end
+			end)
 		end
-	end)
-	local conn2 = UserInputService.InputChanged:Connect(function(input)
-		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+	end))
+
+	table.insert(self.Window._connections, UserInputService.InputChanged:Connect(function(input)
+		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+			or input.UserInputType == Enum.UserInputType.Touch) then
 			setFromX(input.Position.X)
 		end
-	end)
-	local conn3 = UserInputService.InputEnded:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-			dragging = false
-		end
-	end)
-	table.insert(self.Window._connections, conn1)
-	table.insert(self.Window._connections, conn2)
-	table.insert(self.Window._connections, conn3)
+	end))
 
-	Controller = {
-		Track = Track,
-		Fill = Fill,
-		Knob = Knob,
-		Value = value,
-		-- :Set(numero) actualiza la barra Y dispara el callback.
-		Set = function(_self, newValue)
-			apply(newValue, true)
-			_self.Value = value
-		end,
-	}
-	return Controller
+	registerFlag(config.Flag, Slider, value)
+	return Slider
 end
 
--- ============================================================
--- 	DROPDOWN
--- ============================================================
-function SugarUI.Tab_CreateDropdown(self, config)
+-- ---------------- Dropdown ----------------
+function SugarUI:CreateDropdown(config)
 	config = config or {}
-	local Callback = config.Callback or function() end
+	local callback = config.Callback or function() end
 	local options = config.Options or {}
 	local selected = config.Default or options[1]
-	setFlag(config.Flag, selected)
 
 	local Row = new("Frame", {
-		Size = UDim2.new(1, 0, 0, 36),
-		BackgroundColor3 = Theme.PanelAlt,
+		Size = UDim2.new(1, 0, 0, 44),
+		BackgroundColor3 = Theme.Panel,
+		BackgroundTransparency = Theme.PanelTransparency,
 		LayoutOrder = self._rowCount,
 		ClipsDescendants = false,
 		ZIndex = 2,
 		Parent = self.Page,
-	}, { corner(8) })
+	}, { corner(14), stroke(Theme.Stroke, 1), pad(0, 0, 14, 0, 14) })
 	self._rowCount += 1
-
-	local Header = new("TextButton", {
-		Text = "",
-		AutoButtonColor = false,
-		BackgroundTransparency = 1,
-		Size = UDim2.new(1, 0, 0, 36),
-		ZIndex = 2,
-		Parent = Row,
-	})
 
 	new("TextLabel", {
 		Text = config.Text or "Opciones",
@@ -559,105 +784,87 @@ function SugarUI.Tab_CreateDropdown(self, config)
 		TextColor3 = Theme.TextDim,
 		TextXAlignment = Enum.TextXAlignment.Left,
 		BackgroundTransparency = 1,
-		Size = UDim2.new(0.5, -12, 1, 0),
-		Position = UDim2.new(0, 12, 0, 0),
-		ZIndex = 2,
+		Size = UDim2.new(0.5, 0, 1, 0),
 		Parent = Row,
 	})
 
 	local SelectedLabel = new("TextLabel", {
-		Text = tostring(selected or ""),
+		Text = tostring(selected or "—"),
 		Font = Theme.FontSemibold,
-		TextSize = 13,
-		TextColor3 = Theme.Text,
+		TextSize = 14,
+		TextColor3 = Theme.Accent,
 		TextXAlignment = Enum.TextXAlignment.Right,
 		BackgroundTransparency = 1,
-		Size = UDim2.new(0.5, -12, 1, 0),
-		Position = UDim2.new(0.5, 0, 0, 0),
-		ZIndex = 2,
+		Size = UDim2.new(0.5, -20, 1, 0),
 		Parent = Row,
 	})
+
+	local ClickOverlay = new("TextButton", { Text = "", BackgroundTransparency = 1, Size = UDim2.new(1, 0, 1, 0), Parent = Row })
 
 	local ListFrame = new("Frame", {
-		Size = UDim2.new(1, 0, 0, 0),
-		Position = UDim2.new(0, 0, 1, 4),
-		BackgroundColor3 = Theme.Panel,
+		Size = UDim2.new(1, 0, 0, math.min(#options, 5) * 32 + 8),
+		Position = UDim2.new(0, 0, 1, 6),
+		BackgroundColor3 = Theme.PanelAlt,
 		Visible = false,
 		ZIndex = 5,
-		AutomaticSize = Enum.AutomaticSize.Y,
 		Parent = Row,
 	}, {
-		corner(8), stroke(Theme.Stroke, 1),
+		corner(12), stroke(Theme.Stroke, 1), pad(4),
 		new("UIListLayout", { Padding = UDim.new(0, 2), SortOrder = Enum.SortOrder.LayoutOrder }),
-		pad(4),
 	})
 
-	local Controller
-	local open = false
+	local Dropdown = setmetatable({ Value = selected, Callback = callback, Options = options }, SugarUI)
 
-	local function selectOption(opt, fireCallback)
-		selected = opt
-		setFlag(config.Flag, selected)
-		SelectedLabel.Text = tostring(opt)
-		if fireCallback then
-			safeCall(Callback, opt)
-		end
+	-- :Set(option) cambia la selección Y dispara el callback — útil para
+	-- sincronizar el dropdown con un estado externo (ej: modo de combate).
+	function Dropdown:Set(option)
+		self.Value = option
+		SelectedLabel.Text = tostring(option)
+		SugarUI.FlagValues[config.Flag] = option
+		safeCall(self.Callback, option)
 	end
 
-	for _, opt in ipairs(options) do
-		local OptBtn = new("TextButton", {
-			Text = tostring(opt),
+	for _, optionValue in ipairs(options) do
+		local OptionBtn = new("TextButton", {
+			Text = tostring(optionValue),
 			Font = Theme.Font,
 			TextSize = 13,
 			TextColor3 = Theme.Text,
+			BackgroundColor3 = Theme.Panel,
 			AutoButtonColor = false,
-			BackgroundColor3 = Theme.PanelAlt,
 			Size = UDim2.new(1, 0, 0, 28),
-			ZIndex = 6,
 			Parent = ListFrame,
-		}, { corner(6) })
+		}, { corner(8) })
+		hoverTint(OptionBtn, Theme.Panel, Theme.Sidebar)
 
-		hoverTint(OptBtn, Theme.PanelAlt, Theme.Accent)
-
-		local conn = OptBtn.MouseButton1Click:Connect(function()
-			selectOption(opt, true)
-			open = false
+		table.insert(self.Window._connections, OptionBtn.MouseButton1Click:Connect(function()
+			Dropdown:Set(optionValue)
 			ListFrame.Visible = false
-		end)
-		table.insert(self.Window._connections, conn)
+		end))
 	end
 
-	local headerConn = Header.MouseButton1Click:Connect(function()
-		open = not open
-		ListFrame.Visible = open
-	end)
-	table.insert(self.Window._connections, headerConn)
+	table.insert(self.Window._connections, ClickOverlay.MouseButton1Click:Connect(function()
+		ListFrame.Visible = not ListFrame.Visible
+	end))
 
-	Controller = {
-		Row = Row,
-		-- :Set(opcion) actualiza el texto seleccionado Y dispara el callback.
-		Set = function(_self, opt)
-			selectOption(opt, true)
-		end,
-	}
-	return Controller
+	registerFlag(config.Flag, Dropdown, selected)
+	return Dropdown
 end
 
--- ============================================================
--- 	KEYBIND
--- ============================================================
-function SugarUI.Tab_CreateKeybind(self, config)
+-- ---------------- Keybind ----------------
+function SugarUI:CreateKeybind(config)
 	config = config or {}
-	local Callback = config.Callback or function() end
-	local currentKey = config.Default or Enum.KeyCode.Unknown
-	setFlag(config.Flag, currentKey)
+	local callback = config.Callback or function() end
+	local currentKey = config.Default or Enum.KeyCode.RightShift
+	local listening = false
 
 	local Row = new("Frame", {
-		Size = UDim2.new(1, 0, 0, 36),
-		BackgroundColor3 = Theme.PanelAlt,
+		Size = UDim2.new(1, 0, 0, 44),
+		BackgroundColor3 = Theme.Panel,
+		BackgroundTransparency = Theme.PanelTransparency,
 		LayoutOrder = self._rowCount,
 		Parent = self.Page,
-	}, { corner(8), pad(0, 0, 12, 0, 12) })
+	}, { corner(14), stroke(Theme.Stroke, 1), pad(0, 0, 14, 0, 14) })
 	self._rowCount += 1
 
 	new("TextLabel", {
@@ -667,76 +874,52 @@ function SugarUI.Tab_CreateKeybind(self, config)
 		TextColor3 = Theme.Text,
 		TextXAlignment = Enum.TextXAlignment.Left,
 		BackgroundTransparency = 1,
-		Size = UDim2.new(1, -90, 1, 0),
+		Size = UDim2.new(1, -110, 1, 0),
 		Parent = Row,
 	})
 
 	local KeyButton = new("TextButton", {
 		Text = currentKey.Name,
 		Font = Theme.FontSemibold,
-		TextSize = 12,
+		TextSize = 13,
 		TextColor3 = Theme.Text,
 		AutoButtonColor = false,
-		BackgroundColor3 = Theme.Panel,
-		Size = UDim2.new(0, 74, 0, 26),
-		Position = UDim2.new(1, -74, 0.5, -13),
+		BackgroundColor3 = Theme.PanelAlt,
+		Size = UDim2.new(0, 90, 0, 28),
+		Position = UDim2.new(1, -90, 0.5, -14),
 		Parent = Row,
-	}, { corner(6), stroke(Theme.Stroke, 1) })
+	}, { corner(8), stroke(Theme.Stroke, 1) })
 
-	local Controller
-	local listening = false
+	local Keybind = setmetatable({ Value = currentKey, Callback = callback }, SugarUI)
 
-	local function apply(newKey, fireCallback)
-		currentKey = newKey
-		setFlag(config.Flag, currentKey)
-		KeyButton.Text = currentKey.Name
-		if fireCallback then
-			safeCall(Callback, currentKey)
-		end
+	-- :Set(KeyCode) reasigna la tecla programáticamente (útil para permitir
+	-- que el usuario cargue un perfil de teclas guardado, por ejemplo).
+	function Keybind:Set(keyCode)
+		self.Value = keyCode
+		KeyButton.Text = keyCode.Name
+		SugarUI.FlagValues[config.Flag] = keyCode
 	end
 
-	local btnConn = KeyButton.MouseButton1Click:Connect(function()
+	table.insert(self.Window._connections, KeyButton.MouseButton1Click:Connect(function()
 		listening = true
 		KeyButton.Text = "..."
-	end)
-	table.insert(self.Window._connections, btnConn)
+	end))
 
-	-- Captura la siguiente tecla presionada para reasignar el keybind.
-	local inputConn = UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	table.insert(self.Window._connections, UserInputService.InputBegan:Connect(function(input, gameProcessed)
 		if listening and input.UserInputType == Enum.UserInputType.Keyboard then
 			listening = false
-			apply(input.KeyCode, true)
-		elseif not listening and not gameProcessed and input.UserInputType == Enum.UserInputType.Keyboard then
-			-- Dispara el callback cada vez que se presiona la tecla asignada,
-			-- ideal para activar/desactivar una habilidad o menú.
-			if input.KeyCode == currentKey then
-				safeCall(Callback, currentKey)
-			end
+			Keybind:Set(input.KeyCode)
+			return
 		end
-	end)
-	table.insert(self.Window._connections, inputConn)
+		if not listening and not gameProcessed and input.KeyCode == Keybind.Value then
+			-- La tecla asignada se presionó: dispara la lógica externa
+			-- (ej: activar/desactivar un Auto-M1) sin congelar nada.
+			safeCall(Keybind.Callback, Keybind.Value)
+		end
+	end))
 
-	Controller = {
-		Instance = KeyButton,
-		-- :Set(Enum.KeyCode.X) reasigna la tecla programáticamente.
-		Set = function(_self, newKey)
-			apply(newKey, true)
-		end,
-	}
-	return Controller
+	registerFlag(config.Flag, Keybind, currentKey)
+	return Keybind
 end
-
--- Enlazar los métodos "Window_" y "Tab_" a sus respectivas metatablas
--- (separados así para mantener el archivo organizado por componente).
-local WindowMethods = { CreateTab = SugarUI.Window_CreateTab, Destroy = SugarUI.Window_Destroy }
-local TabMethods = {
-	CreateButton = SugarUI.Tab_CreateButton,
-	CreateToggle = SugarUI.Tab_CreateToggle,
-	CreateSlider = SugarUI.Tab_CreateSlider,
-	CreateDropdown = SugarUI.Tab_CreateDropdown,
-	CreateKeybind = SugarUI.Tab_CreateKeybind,
-}
-for name, fn in pairs(WindowMethods) do SugarUI[name] = fn end
-for name, fn in pairs(TabMethods) do SugarUI[name] = fn end
 
 return SugarUI
