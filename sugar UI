@@ -151,6 +151,17 @@ local function accentGradient(rotation)
 	})
 end
 
+-- Ejecuta cualquier lógica que el usuario haya conectado (.OnClick, .OnToggle,
+-- .OnChange, etc.) de forma segura: si esa lógica lanza un error, no rompe la
+-- interfaz — solo se reporta en el output, y la UI sigue funcionando normal.
+local function safeCall(fn, ...)
+	if typeof(fn) ~= "function" then return end
+	local ok, err = pcall(fn, ...)
+	if not ok then
+		warn("[PanelUI] Error en callback conectado por el usuario: " .. tostring(err))
+	end
+end
+
 -- ============================================================
 -- 	CREATE WINDOW
 -- ============================================================
@@ -177,22 +188,32 @@ function PanelUI:CreateWindow(config)
 	-- Contenedor raíz
 	local Root = new("Frame", {
 		Name = "Root",
-		Size = config.Size or UDim2.new(0, 620, 0, 420),
-		Position = config.Position or UDim2.new(0.5, -310, 0.5, -210),
+		Size = config.Size or UDim2.new(0, 640, 0, 440),
+		Position = config.Position or UDim2.new(0.5, -320, 0.5, -220),
 		BackgroundColor3 = config.BackgroundColor or Theme.Background,
 		BackgroundTransparency = config.BackgroundTransparency or Theme.BackgroundTransparency,
 		ClipsDescendants = true,
 		Parent = ScreenGui,
-	}, { corner(14), stroke(Theme.Stroke, 1) })
+	}, { corner(22), stroke(Theme.Stroke, 1) })
+
+	-- Constantes de layout: separa TopBar / Sidebar / Content como tarjetas
+	-- flotantes con huecos entre ellas, para que TODAS tengan esquinas
+	-- redondeadas visibles (no solo el borde exterior).
+	local MARGIN = 12
+	local GAP = 10
+	local TOPBAR_H = 54
+	local SIDEBAR_W = 190
+	local ROW_Y = MARGIN + TOPBAR_H + GAP
 
 	-- ---------------- Barra superior ----------------
 	local TopBar = new("Frame", {
 		Name = "TopBar",
-		Size = UDim2.new(1, 0, 0, 56),
+		Size = UDim2.new(1, -MARGIN * 2, 0, TOPBAR_H),
+		Position = UDim2.new(0, MARGIN, 0, MARGIN),
 		BackgroundColor3 = Theme.Sidebar,
 		BackgroundTransparency = Theme.PanelTransparency,
 		Parent = Root,
-	}, { stroke(Theme.Stroke, 1) })
+	}, { corner(16), stroke(Theme.Stroke, 1) })
 
 	local Badge1 = new("TextLabel", {
 		Text = "1",
@@ -203,7 +224,7 @@ function PanelUI:CreateWindow(config)
 		Size = UDim2.new(0, 32, 0, 32),
 		Position = UDim2.new(0, 16, 0.5, -16),
 		Parent = TopBar,
-	}, { corner(9) })
+	}, { corner(16), accentGradient() })
 
 	local TitleLabel = new("TextLabel", {
 		Text = config.Title or "Panel",
@@ -228,7 +249,7 @@ function PanelUI:CreateWindow(config)
 			Size = UDim2.new(0, 54, 0, 22),
 			Position = UDim2.new(0, 220, 0.5, -11),
 			Parent = TopBar,
-		}, { corner(6) })
+		}, { corner(11), accentGradient() })
 	end
 
 	local ServerPill = new("Frame", {
@@ -267,7 +288,7 @@ function PanelUI:CreateWindow(config)
 		Size = UDim2.new(0, 32, 0, 32),
 		Position = UDim2.new(1, -80, 0.5, -16),
 		Parent = TopBar,
-	}, { corner(8), accentGradient() })
+	}, { corner(16), accentGradient() })
 
 	local CloseBtn = new("TextButton", {
 		Text = "✕",
@@ -278,7 +299,7 @@ function PanelUI:CreateWindow(config)
 		Size = UDim2.new(0, 32, 0, 32),
 		Position = UDim2.new(1, -40, 0.5, -16),
 		Parent = TopBar,
-	}, { corner(8), accentGradient() })
+	}, { corner(16), accentGradient() })
 
 	hoverTint(MinimizeBtn, Theme.Accent, Theme.AccentDim)
 	hoverTint(CloseBtn, Theme.Accent, Theme.AccentDim)
@@ -286,12 +307,12 @@ function PanelUI:CreateWindow(config)
 	-- ---------------- Sidebar ----------------
 	local Sidebar = new("Frame", {
 		Name = "Sidebar",
-		Size = UDim2.new(0, 200, 1, -56),
-		Position = UDim2.new(0, 0, 0, 56),
+		Size = UDim2.new(0, SIDEBAR_W, 1, -(ROW_Y + MARGIN)),
+		Position = UDim2.new(0, MARGIN, 0, ROW_Y),
 		BackgroundColor3 = Theme.Sidebar,
 		BackgroundTransparency = Theme.PanelTransparency,
 		Parent = Root,
-	}, { stroke(Theme.Stroke, 1) })
+	}, { corner(16), stroke(Theme.Stroke, 1) })
 
 	local SearchBox = new("TextBox", {
 		PlaceholderText = "Buscar pestaña...",
@@ -306,7 +327,7 @@ function PanelUI:CreateWindow(config)
 		Size = UDim2.new(1, -32, 0, 36),
 		Position = UDim2.new(0, 16, 0, 16),
 		Parent = Sidebar,
-	}, { corner(8), pad(0, 0, 0, 0, 12), stroke(Theme.Stroke, 1) })
+	}, { corner(18), pad(0, 0, 0, 0, 12), stroke(Theme.Stroke, 1) })
 
 	local SidebarList = new("ScrollingFrame", {
 		Name = "SidebarList",
@@ -342,12 +363,12 @@ function PanelUI:CreateWindow(config)
 	-- ---------------- Área de contenido ----------------
 	local Content = new("Frame", {
 		Name = "Content",
-		Size = UDim2.new(1, -200, 1, -56),
-		Position = UDim2.new(0, 200, 0, 56),
-		BackgroundColor3 = Theme.Background,
-		BackgroundTransparency = 1,
+		Size = UDim2.new(1, -(MARGIN + SIDEBAR_W + GAP + MARGIN), 1, -(ROW_Y + MARGIN)),
+		Position = UDim2.new(0, MARGIN + SIDEBAR_W + GAP, 0, ROW_Y),
+		BackgroundColor3 = Theme.Panel,
+		BackgroundTransparency = Theme.PanelTransparency,
 		Parent = Root,
-	})
+	}, { corner(16), stroke(Theme.Stroke, 1) })
 
 	local ContentScroll = new("ScrollingFrame", {
 		Size = UDim2.new(1, 0, 1, 0),
@@ -434,11 +455,11 @@ function PanelUI:CreateWindow(config)
 
 	MinimizeBtn.MouseButton1Click:Connect(function()
 		Window:Hide()
-		if Window.OnMinimize then Window.OnMinimize() end
+		if Window.OnMinimize then safeCall(Window.OnMinimize) end
 	end)
 	CloseBtn.MouseButton1Click:Connect(function()
 		Window:Hide()
-		if Window.OnClose then Window.OnClose() end
+		if Window.OnClose then safeCall(Window.OnClose) end
 	end)
 
 	-- ---------------- Arrastrar la ventana (desde la barra superior) ----------------
@@ -579,6 +600,11 @@ function PanelUI:CreateTab(config)
 
 	local isFirst = #self._tabs == 0
 
+	local tabChildren = { corner(22) }
+	if isFirst then
+		table.insert(tabChildren, accentGradient())
+	end
+
 	local TabButton = new("TextButton", {
 		Name = config.Name,
 		Text = "",
@@ -586,7 +612,7 @@ function PanelUI:CreateTab(config)
 		BackgroundColor3 = isFirst and Theme.Accent or Theme.Sidebar,
 		Size = UDim2.new(1, 0, 0, 44),
 		Parent = self.SidebarList,
-	}, { corner(9) })
+	}, tabChildren)
 
 	new("TextLabel", {
 		Text = config.Icon or "•",
@@ -598,7 +624,7 @@ function PanelUI:CreateTab(config)
 		Size = UDim2.new(0, 26, 0, 26),
 		Position = UDim2.new(0, 9, 0.5, -13),
 		Parent = TabButton,
-	}, { corner(7) })
+	}, { corner(13) })
 
 	new("TextLabel", {
 		Text = config.Name or "Tab",
@@ -832,7 +858,7 @@ function PanelUI:CreateQuickAccess(config)
 		BackgroundTransparency = Theme.PanelTransparency,
 		LayoutOrder = self._rowCount,
 		Parent = self.Page,
-	}, { corner(12), stroke(Theme.Stroke, 1), pad(16) })
+	}, { corner(18), stroke(Theme.Stroke, 1), pad(16) })
 	self._rowCount += 1
 
 	new("TextLabel", {
@@ -843,7 +869,7 @@ function PanelUI:CreateQuickAccess(config)
 		BackgroundColor3 = Theme.PanelAlt,
 		Size = UDim2.new(0, 34, 0, 34),
 		Parent = Card,
-	}, { corner(9) })
+	}, { corner(17) })
 
 	new("TextLabel", {
 		Text = config.Title or "Acceso",
@@ -887,7 +913,7 @@ function PanelUI:CreateButton(config)
 		Size = UDim2.new(0, 160, 0, 40),
 		LayoutOrder = self._rowCount,
 		Parent = self.Page,
-	}, { corner(9), accentGradient() })
+	}, { corner(20), accentGradient() })
 	self._rowCount += 1
 
 	local Button = setmetatable({ Instance = Btn }, PanelUI)
@@ -910,7 +936,7 @@ function PanelUI:CreateToggle(config)
 		BackgroundTransparency = Theme.PanelTransparency,
 		LayoutOrder = self._rowCount,
 		Parent = self.Page,
-	}, { corner(10), stroke(Theme.Stroke, 1), pad(0, 0, 16, 0, 16) })
+	}, { corner(16), stroke(Theme.Stroke, 1), pad(0, 0, 16, 0, 16) })
 	self._rowCount += 1
 
 	new("TextLabel", {
@@ -965,7 +991,7 @@ function PanelUI:CreateSlider(config)
 		BackgroundTransparency = Theme.PanelTransparency,
 		LayoutOrder = self._rowCount,
 		Parent = self.Page,
-	}, { corner(10), stroke(Theme.Stroke, 1), pad(0, 10, 16, 10, 16) })
+	}, { corner(16), stroke(Theme.Stroke, 1), pad(0, 10, 16, 10, 16) })
 	self._rowCount += 1
 
 	new("TextLabel", {
