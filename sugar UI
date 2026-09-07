@@ -523,8 +523,8 @@ function SugarUI:CreateWindow(config)
 		AutoButtonColor = false,
 		AutomaticSize = Enum.AutomaticSize.X,
 		Size = UDim2.new(0, 0, 0, BUBBLE_H),
-		AnchorPoint = Vector2.new(1, 1),
-		Position = UDim2.new(1, -20, 1, -20),
+		AnchorPoint = Vector2.new(0.5, 0),
+		Position = UDim2.new(0.5, 0, 0, 20),
 		BackgroundColor3 = Theme.Accent,
 		Visible = false,
 		Parent = ScreenGui,
@@ -682,8 +682,8 @@ function SugarUI:CreateWindow(config)
 		safeCall(Window.OnMinimize)
 	end))
 	track(CloseBtn.MouseButton1Click:Connect(function()
+		Window:Hide()
 		safeCall(Window.OnClose)
-		Window:Destroy()
 	end))
 
 	-- ---------------- Arrastrar la ventana ----------------
