@@ -51,6 +51,7 @@
 			Badge      = "ADMIN",
 			ServerName = "Servidor en línea",
 			ServerOn   = true,
+			PillColor  = "rojo", -- "rojo" (default) | "azul" | "negro" — color de la píldora flotante
 		})
 
 		local Principal = Window:CreateTab({ Name = "Principal", Icon = "P", Section = "GENERAL" })
@@ -141,6 +142,17 @@ local Theme = {
 SugarUI.Theme = Theme
 
 -- ============================================================
+-- 	COLORES DE LA PÍLDORA (burbuja flotante) — seleccionables
+-- ============================================================
+-- Se elige con CreateWindow({ PillColor = "azul" | "negro" | "rojo" }).
+-- "rojo" es el rojo normal del tema (el de siempre).
+local PILL_PRESETS = {
+	rojo  = { Color3.fromRGB(214, 38, 51),  Color3.fromRGB(150, 26, 36) },
+	azul  = { Color3.fromRGB(37, 99, 235),  Color3.fromRGB(29, 78, 216) },
+	negro = { Color3.fromRGB(40, 40, 45),   Color3.fromRGB(18, 18, 21) },
+}
+
+-- ============================================================
 -- 	HELPERS
 -- ============================================================
 local function new(class, props, children)
@@ -193,6 +205,10 @@ end
 
 local function accentGradient(rotation)
 	return new("UIGradient", { Color = ColorSequence.new(Theme.Accent, Theme.AccentDim), Rotation = rotation or 90 })
+end
+
+local function twoColorGradient(c1, c2, rotation)
+	return new("UIGradient", { Color = ColorSequence.new(c1, c2), Rotation = rotation or 90 })
 end
 
 -- ============================================================
@@ -516,6 +532,8 @@ function SugarUI:CreateWindow(config)
 	-- esquinas, como el ícono de referencia). Se arma sola con
 	-- AutomaticSize según el contenido, sin usar ninguna imagen externa.
 	local BUBBLE_H = 44
+	local pillKey = string.lower(tostring(config.PillColor or "rojo"))
+	local pillPreset = PILL_PRESETS[pillKey] or PILL_PRESETS.rojo
 
 	local Bubble = new("TextButton", {
 		Name = "Bubble",
@@ -525,13 +543,13 @@ function SugarUI:CreateWindow(config)
 		Size = UDim2.new(0, 0, 0, BUBBLE_H),
 		AnchorPoint = Vector2.new(0.5, 0),
 		Position = UDim2.new(0.5, 0, 0, 20),
-		BackgroundColor3 = Theme.Accent,
+		BackgroundColor3 = pillPreset[1],
 		Visible = false,
 		Parent = ScreenGui,
 	}, {
 		corner(BUBBLE_H // 2),
 		stroke(Theme.Stroke, 1),
-		accentGradient(135),
+		twoColorGradient(pillPreset[1], pillPreset[2], 135),
 		pad(0, 0, 16, 0, 16),
 		new("UIListLayout", {
 			FillDirection = Enum.FillDirection.Horizontal,
@@ -540,6 +558,59 @@ function SugarUI:CreateWindow(config)
 			SortOrder = Enum.SortOrder.LayoutOrder,
 		}),
 	})
+
+	-- Tuerca / engranaje (reemplaza al texto "AZC"): aro hecho con
+	-- UIStroke (para que sea un anillo real, no un disco con un color
+	-- "parchado" simulando el agujero) + dientes alrededor + eje central.
+	local function buildGear(parent, size, color, layoutOrder)
+		local box = new("Frame", {
+			Size = UDim2.new(0, size, 0, size),
+			BackgroundTransparency = 1,
+			LayoutOrder = layoutOrder,
+			Parent = parent,
+		})
+
+		-- Aro (anillo real vía stroke, sin necesidad de "tapar" el centro)
+		new("Frame", {
+			Size = UDim2.new(0, size * 0.62, 0, size * 0.62),
+			Position = UDim2.new(0.5, -size * 0.31, 0.5, -size * 0.31),
+			BackgroundTransparency = 1,
+			Parent = box,
+		}, {
+			corner(size * 0.31),
+			new("UIStroke", { Color = color, Thickness = math.max(2, size * 0.11), ApplyStrokeMode = Enum.ApplyStrokeMode.Border }),
+		})
+
+		-- Eje central
+		new("Frame", {
+			Size = UDim2.new(0, size * 0.16, 0, size * 0.16),
+			Position = UDim2.new(0.5, -size * 0.08, 0.5, -size * 0.08),
+			BackgroundColor3 = color,
+			Parent = box,
+		}, { corner(size * 0.08) })
+
+		-- Dientes alrededor del aro
+		local teethCount = 8
+		local toothW = size * 0.16
+		local toothH = size * 0.24
+		local radius = size * 0.40
+		for i = 0, teethCount - 1 do
+			local angle = i * (360 / teethCount)
+			local rad = math.rad(angle)
+			local cx = size / 2 + math.cos(rad) * radius - toothW / 2
+			local cy = size / 2 + math.sin(rad) * radius - toothH / 2
+			new("Frame", {
+				Size = UDim2.new(0, toothW, 0, toothH),
+				Position = UDim2.new(0, cx, 0, cy),
+				Rotation = angle + 90,
+				BackgroundColor3 = color,
+				BorderSizePixel = 0,
+				Parent = box,
+			}, { corner(1) })
+		end
+
+		return box
+	end
 
 	-- Símbolo de mira/foco: 4 esquinas sueltas formando un cuadrado,
 	-- igual de espíritu al ícono de referencia que mandaste.
@@ -570,25 +641,53 @@ function SugarUI:CreateWindow(config)
 		return box
 	end
 
-	-- Paleta (dulce): cabeza redonda con gradiente + palito.
+	-- Paleta (dulce) más detallada: cabeza con gradiente tipo caramelo
+	-- (rayas blanco/acento en diagonal, efecto "swirl"), brillo para dar
+	-- volumen, y palito.
 	local function buildLollipop(parent, size, layoutOrder)
 		local box = new("Frame", {
-			Size = UDim2.new(0, size, 0, size + 10),
+			Size = UDim2.new(0, size, 0, size + 12),
 			BackgroundTransparency = 1,
 			LayoutOrder = layoutOrder,
 			Parent = parent,
 		})
+
 		new("Frame", {
-			Size = UDim2.new(0, size, 0, size),
-			BackgroundColor3 = Color3.fromRGB(255, 255, 255),
-			Parent = box,
-		}, { corner(size / 2), accentGradient(45), stroke(Theme.Stroke, 1) })
-		new("Frame", {
-			Size = UDim2.new(0, 2, 0, 10),
-			Position = UDim2.new(0.5, -1, 0, size - 2),
-			BackgroundColor3 = Theme.TextFaint,
+			Size = UDim2.new(0, 2, 0, 12),
+			Position = UDim2.new(0.5, -1, 0, size - 4),
+			BackgroundColor3 = Color3.fromRGB(232, 222, 208),
 			Parent = box,
 		}, { corner(1) })
+
+		local Head = new("Frame", {
+			Size = UDim2.new(0, size, 0, size),
+			BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+			ClipsDescendants = true,
+			Parent = box,
+		}, {
+			corner(size / 2),
+			stroke(Theme.Stroke, 1),
+			new("UIGradient", {
+				Color = ColorSequence.new({
+					ColorSequenceKeypoint.new(0.00, Color3.fromRGB(255, 255, 255)),
+					ColorSequenceKeypoint.new(0.25, Theme.Accent),
+					ColorSequenceKeypoint.new(0.50, Color3.fromRGB(255, 255, 255)),
+					ColorSequenceKeypoint.new(0.75, Theme.AccentDim),
+					ColorSequenceKeypoint.new(1.00, Color3.fromRGB(255, 255, 255)),
+				}),
+				Rotation = 35,
+			}),
+		})
+
+		new("Frame", {
+			Size = UDim2.new(0, size * 0.28, 0, size * 0.16),
+			Position = UDim2.new(0, size * 0.16, 0, size * 0.12),
+			Rotation = -20,
+			BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+			BackgroundTransparency = 0.35,
+			Parent = Head,
+		}, { corner(6) })
+
 		return box
 	end
 
@@ -606,23 +705,13 @@ function SugarUI:CreateWindow(config)
 		})
 	end
 
-	new("TextLabel", {
-		Text = "AZC",
-		Font = Theme.FontBold,
-		TextSize = 15,
-		TextColor3 = Theme.Text,
-		BackgroundTransparency = 1,
-		AutomaticSize = Enum.AutomaticSize.X,
-		Size = UDim2.new(0, 0, 1, 0),
-		LayoutOrder = 1,
-		Parent = Bubble,
-	})
+	buildGear(Bubble, 20, Theme.Text, 1)
 	bubbleSlash(2)
 	buildLollipop(Bubble, 18, 3)
 	bubbleSlash(4)
 	buildReticle(Bubble, 20, Theme.Text, 5)
 
-	hoverTint(Bubble, Theme.Accent, Theme.AccentDim)
+	hoverTint(Bubble, pillPreset[1], pillPreset[2])
 
 	-- ============================================================
 	local Window = setmetatable({
