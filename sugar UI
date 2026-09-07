@@ -33,15 +33,6 @@
 	   Cada Window guarda todas sus RBXScriptConnections en _connections y
 	   las desconecta en :Destroy(), evitando fugas de memoria.
 
-	6. HILOS RASTREADOS + :Stop()
-	   Cada vez que un controlador (Toggle, Slider, Dropdown, Keybind,
-	   Button, QuickAccess) dispara su Callback, se guarda el hilo devuelto
-	   por task.spawn en controlador._thread. Cualquier script externo puede
-	   llamar a controlador:Stop() para cortar de una un loop que haya
-	   quedado corriendo (por ejemplo, si el comprador de la librería usa
-	   una lógica de combate propia que no revisa el flag por sí sola).
-	   Esto es genérico: no depende de qué juego ni de qué lógica sea.
-
 	Uso básico:
 
 		local SugarUI = require(script.SugarUI)
@@ -59,13 +50,12 @@
 		Principal:CreateStatRow()
 		Principal:CreateStat({ Value = "24", Label = "jugadores en línea" })
 
-		local AutoM1 = Combate:CreateToggle({
+		Combate:CreateToggle({
 			Text = "Auto-M1",
 			Flag = "AutoM1",
 			Callback = function(state)
 				while state and SugarUI.FlagValues["AutoM1"] do
-					-- tu lógica de combate aquí (puede ser CUALQUIER cosa,
-					-- de cualquier juego: no depende de SugarUI)
+					-- tu lógica de combate aquí
 					task.wait(0.1)
 				end
 			end,
@@ -73,10 +63,6 @@
 
 		-- Disparar desde afuera:
 		SugarUI.Flags["AutoM1"]:Set(true)
-
-		-- Frenar el hilo del callback a la fuerza desde afuera, sin
-		-- importar qué lógica tenga adentro:
-		AutoM1:Stop()
 ]]
 
 local TweenService = game:GetService("TweenService")
@@ -89,7 +75,7 @@ SugarUI.__index = SugarUI
 -- ============================================================
 -- 	PROPIEDADES DE LIBRERÍA
 -- ============================================================
-SugarUI.Version    = "1.2.0"
+SugarUI.Version    = "1.1.0"
 SugarUI.Windows    = {}
 SugarUI.Flags      = {}   -- Flags[flagName] = controlador (con :Set, :Get, etc.)
 SugarUI.FlagValues = {}   -- FlagValues[flagName] = valor actual "crudo"
@@ -200,14 +186,13 @@ end
 -- ============================================================
 -- Cada callback conectado por el usuario corre en su PROPIO hilo
 -- (task.spawn) y está protegido con pcall. Un `while true do` dentro de un
--- callback jamás congela la UI ni el juego. Devuelve el hilo creado para
--- que el controlador que lo llamó pueda guardarlo y ofrecer :Stop().
+-- callback jamás congela la UI ni el juego.
 local function safeCall(fn, ...)
 	fn = fn or function() end
-	if typeof(fn) ~= "function" then return nil end
+	if typeof(fn) ~= "function" then return end
 
 	local args = table.pack(...)
-	local thread = task.spawn(function()
+	task.spawn(function()
 		local ok, err = pcall(function()
 			fn(table.unpack(args, 1, args.n))
 		end)
@@ -215,17 +200,6 @@ local function safeCall(fn, ...)
 			warn("[SugarUI] Error en callback conectado por el usuario: " .. tostring(err))
 		end
 	end)
-	return thread
-end
-
--- Corta a la fuerza el hilo activo de un controlador, sin importar qué
--- lógica tenga adentro (loop propio, espera de otro servicio, etc.).
--- Es genérico: no depende del juego ni de la lógica conectada.
-local function stopThread(controller)
-	if controller._thread then
-		pcall(task.cancel, controller._thread)
-		controller._thread = nil
-	end
 end
 
 local function registerFlag(flagName, controller, initialValue)
@@ -910,7 +884,7 @@ function SugarUI:CreateSectionLabel(text)
 end
 
 -- ============================================================
--- 	ACCESO RÁPIDO — ejecuta cualquier lógica externa de forma segura
+-- 	ACCESO RÁPIDO — ahora ejecuta lógica real de forma segura
 -- ============================================================
 function SugarUI:CreateQuickAccess(config)
 	config = config or {}
@@ -954,18 +928,11 @@ function SugarUI:CreateQuickAccess(config)
 		Parent = Card,
 	})
 
-	local QuickAccess = setmetatable({ Card = Card, Callback = callback, _thread = nil }, SugarUI)
+	local QuickAccess = setmetatable({ Card = Card, Callback = callback }, SugarUI)
 
 	-- :Set() dispara la lógica conectada como si se hubiera hecho click.
-	-- Cualquier lógica del comprador (de cualquier juego) corre en su
-	-- propio hilo, protegida con pcall.
 	function QuickAccess:Set(...)
-		self._thread = safeCall(self.Callback, ...)
-	end
-
-	-- Corta el hilo activo del callback, sin importar qué lógica tenga.
-	function QuickAccess:Stop()
-		stopThread(self)
+		safeCall(self.Callback, ...)
 	end
 
 	table.insert(self.Window._connections, ClickOverlay.MouseButton1Click:Connect(function()
@@ -1000,14 +967,10 @@ function SugarUI:CreateButton(config)
 	hoverTint(Btn, Theme.Accent, Theme.AccentDim)
 	pressFeedback(Btn)
 
-	local Button = setmetatable({ Instance = Btn, Callback = callback, _thread = nil }, SugarUI)
+	local Button = setmetatable({ Instance = Btn, Callback = callback }, SugarUI)
 
 	function Button:Set(...)
-		self._thread = safeCall(self.Callback, ...)
-	end
-
-	function Button:Stop()
-		stopThread(self)
+		safeCall(self.Callback, ...)
 	end
 
 	table.insert(self.Window._connections, Btn.MouseButton1Click:Connect(function()
@@ -1062,7 +1025,7 @@ function SugarUI:CreateToggle(config)
 
 	local ClickOverlay = new("TextButton", { Text = "", BackgroundTransparency = 1, Size = UDim2.new(1,0,1,0), Parent = Row })
 
-	local Toggle = setmetatable({ Track = Track, Knob = Knob, Value = state, Callback = callback, _thread = nil }, SugarUI)
+	local Toggle = setmetatable({ Track = Track, Knob = Knob, Value = state, Callback = callback }, SugarUI)
 
 	local function paint(newState)
 		TweenService:Create(Track, TweenInfo.new(0.15), { BackgroundColor3 = newState and Theme.Accent or Theme.PanelAlt }):Play()
@@ -1071,19 +1034,13 @@ function SugarUI:CreateToggle(config)
 
 	-- :Set(bool) actualiza la UI Y dispara la lógica externa conectada.
 	-- Se puede llamar desde CUALQUIER script (ej: un bucle Auto-M1 que se
-	-- desactiva solo tras cierta condición), sin importar el juego.
+	-- desactiva solo tras cierta condición).
 	function Toggle:Set(newState)
 		newState = not not newState
 		self.Value = newState
 		paint(newState)
 		SugarUI.FlagValues[config.Flag] = newState
-		self._thread = safeCall(self.Callback, newState)
-	end
-
-	-- Corta a la fuerza el hilo del callback activo (ej: si el loop de
-	-- lógica externa no revisa el flag por sí solo).
-	function Toggle:Stop()
-		stopThread(self)
+		safeCall(self.Callback, newState)
 	end
 
 	table.insert(self.Window._connections, ClickOverlay.MouseButton1Click:Connect(function()
@@ -1160,7 +1117,7 @@ function SugarUI:CreateSlider(config)
 		Parent = Track,
 	}, { corner(7) })
 
-	local Slider = setmetatable({ Track = Track, Fill = Fill, Knob = Knob, Value = value, Callback = callback, _thread = nil }, SugarUI)
+	local Slider = setmetatable({ Track = Track, Fill = Fill, Knob = Knob, Value = value, Callback = callback }, SugarUI)
 
 	local function paint(v)
 		local r = ratio(v)
@@ -1176,21 +1133,9 @@ function SugarUI:CreateSlider(config)
 		self.Value = newValue
 		paint(newValue)
 		SugarUI.FlagValues[config.Flag] = newValue
-		self._thread = safeCall(self.Callback, newValue)
+		safeCall(self.Callback, newValue)
 	end
 
-	function Slider:Stop()
-		stopThread(self)
-	end
-
-	-- ---- FIX: arrastre aislado por slider ----
-	-- Antes, el fin del arrastre dependía de input.Changed (poco fiable:
-	-- si no disparaba, "dragging" quedaba pegado en true). Como el
-	-- listener de movimiento es GLOBAL (UserInputService.InputChanged) y
-	-- lo comparten todos los sliders, un "dragging" pegado en un slider
-	-- hacía que se moviera solo con el mouse arrastrando OTRO slider.
-	-- Ahora "dragging" se resetea con UserInputService.InputEnded, que
-	-- siempre dispara, así cada slider queda realmente aislado.
 	local dragging = false
 	local function setFromX(xPos)
 		local relative = math.clamp((xPos - Track.AbsolutePosition.X) / Track.AbsoluteSize.X, 0, 1)
@@ -1202,6 +1147,11 @@ function SugarUI:CreateSlider(config)
 			or input.UserInputType == Enum.UserInputType.Touch then
 			dragging = true
 			setFromX(input.Position.X)
+			input.Changed:Connect(function()
+				if input.UserInputState == Enum.UserInputState.End then
+					dragging = false
+				end
+			end)
 		end
 	end))
 
@@ -1209,13 +1159,6 @@ function SugarUI:CreateSlider(config)
 		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
 			or input.UserInputType == Enum.UserInputType.Touch) then
 			setFromX(input.Position.X)
-		end
-	end))
-
-	table.insert(self.Window._connections, UserInputService.InputEnded:Connect(function(input)
-		if dragging and (input.UserInputType == Enum.UserInputType.MouseButton1
-			or input.UserInputType == Enum.UserInputType.Touch) then
-			dragging = false
 		end
 	end))
 
@@ -1279,7 +1222,7 @@ function SugarUI:CreateDropdown(config)
 		new("UIListLayout", { Padding = UDim.new(0, 2), SortOrder = Enum.SortOrder.LayoutOrder }),
 	})
 
-	local Dropdown = setmetatable({ Value = selected, Callback = callback, Options = options, _thread = nil }, SugarUI)
+	local Dropdown = setmetatable({ Value = selected, Callback = callback, Options = options }, SugarUI)
 
 	-- :Set(opción) cambia la selección Y dispara el callback — útil para
 	-- sincronizar el dropdown con un estado externo (ej: modo de combate).
@@ -1287,11 +1230,7 @@ function SugarUI:CreateDropdown(config)
 		self.Value = option
 		SelectedLabel.Text = tostring(option)
 		SugarUI.FlagValues[config.Flag] = option
-		self._thread = safeCall(self.Callback, option)
-	end
-
-	function Dropdown:Stop()
-		stopThread(self)
+		safeCall(self.Callback, option)
 	end
 
 	for _, optionValue in ipairs(options) do
@@ -1362,7 +1301,7 @@ function SugarUI:CreateKeybind(config)
 		Parent = Row,
 	}, { corner(8), stroke(Theme.Stroke, 1) })
 
-	local Keybind = setmetatable({ Value = currentKey, Callback = callback, _thread = nil }, SugarUI)
+	local Keybind = setmetatable({ Value = currentKey, Callback = callback }, SugarUI)
 
 	-- :Set(KeyCode) reasigna la tecla programáticamente (ej: cargar un
 	-- perfil de teclas guardado).
@@ -1370,10 +1309,6 @@ function SugarUI:CreateKeybind(config)
 		self.Value = keyCode
 		KeyButton.Text = keyCode.Name
 		SugarUI.FlagValues[config.Flag] = keyCode
-	end
-
-	function Keybind:Stop()
-		stopThread(self)
 	end
 
 	table.insert(self.Window._connections, KeyButton.MouseButton1Click:Connect(function()
@@ -1389,9 +1324,8 @@ function SugarUI:CreateKeybind(config)
 		end
 		if not listening and not gameProcessed and input.KeyCode == Keybind.Value then
 			-- La tecla asignada se presionó: dispara la lógica externa
-			-- (ej: activar/desactivar un Auto-M1) sin congelar nada, sin
-			-- importar de qué juego sea esa lógica.
-			Keybind._thread = safeCall(Keybind.Callback, Keybind.Value)
+			-- (ej: activar/desactivar un Auto-M1) sin congelar nada.
+			safeCall(Keybind.Callback, Keybind.Value)
 		end
 	end))
 
