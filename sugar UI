@@ -36,6 +36,7 @@
 
 local TweenService = game:GetService("TweenService")
 local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
 
 local PanelUI = {}
 PanelUI.__index = PanelUI
@@ -77,20 +78,24 @@ end
 -- 	PALETA / TEMA
 -- ============================================================
 local Theme = {
-	Background      = Color3.fromRGB(18, 16, 20),
-	Sidebar         = Color3.fromRGB(22, 20, 23),
-	Panel           = Color3.fromRGB(27, 24, 28),
-	PanelAlt        = Color3.fromRGB(32, 28, 33),
-	Accent          = Color3.fromRGB(196, 34, 47),   -- rojo principal
-	AccentDim       = Color3.fromRGB(120, 30, 38),
+	Background      = Color3.fromRGB(46, 12, 16),    -- fondo rojo oscuro (semi-transparente)
+	Sidebar         = Color3.fromRGB(42, 11, 15),
+	Panel           = Color3.fromRGB(58, 16, 20),
+	PanelAlt        = Color3.fromRGB(70, 20, 25),
+	Accent          = Color3.fromRGB(214, 38, 51),   -- rojo principal (botones)
+	AccentDim       = Color3.fromRGB(150, 26, 36),
 	Text            = Color3.fromRGB(240, 240, 242),
-	TextDim         = Color3.fromRGB(150, 147, 153),
-	TextFaint       = Color3.fromRGB(105, 102, 110),
+	TextDim         = Color3.fromRGB(210, 175, 178),
+	TextFaint       = Color3.fromRGB(170, 130, 133),
 	Online          = Color3.fromRGB(63, 201, 141),
-	Stroke          = Color3.fromRGB(40, 37, 42),
+	Stroke          = Color3.fromRGB(90, 30, 35),
 	Font            = Enum.Font.GothamMedium,
 	FontBold        = Enum.Font.GothamBold,
 	FontSemibold    = Enum.Font.GothamSemibold,
+
+	-- Transparencias (0 = opaco, 1 = invisible)
+	BackgroundTransparency = 0.35,
+	PanelTransparency       = 0.25,
 }
 
 PanelUI.Theme = Theme -- expuesto como propiedad pública de la librería
@@ -164,9 +169,10 @@ function PanelUI:CreateWindow(config)
 	-- Contenedor raíz
 	local Root = new("Frame", {
 		Name = "Root",
-		Size = UDim2.new(0, 900, 0, 560),
-		Position = UDim2.new(0.5, -450, 0.5, -280),
-		BackgroundColor3 = Theme.Background,
+		Size = config.Size or UDim2.new(0, 620, 0, 420),
+		Position = config.Position or UDim2.new(0.5, -310, 0.5, -210),
+		BackgroundColor3 = config.BackgroundColor or Theme.Background,
+		BackgroundTransparency = config.BackgroundTransparency or Theme.BackgroundTransparency,
 		ClipsDescendants = true,
 		Parent = ScreenGui,
 	}, { corner(14), stroke(Theme.Stroke, 1) })
@@ -176,6 +182,7 @@ function PanelUI:CreateWindow(config)
 		Name = "TopBar",
 		Size = UDim2.new(1, 0, 0, 56),
 		BackgroundColor3 = Theme.Sidebar,
+		BackgroundTransparency = Theme.PanelTransparency,
 		Parent = Root,
 	}, { stroke(Theme.Stroke, 1) })
 
@@ -242,13 +249,13 @@ function PanelUI:CreateWindow(config)
 		Parent = ServerPill,
 	})
 
-	-- Botones de control (minimizar / cerrar) — solo visuales
+	-- Botones de control (minimizar / cerrar) — rojos, solo visuales
 	local MinimizeBtn = new("TextButton", {
 		Text = "—",
 		Font = Theme.FontBold,
 		TextSize = 14,
 		TextColor3 = Theme.Text,
-		BackgroundColor3 = Theme.PanelAlt,
+		BackgroundColor3 = Theme.Accent,
 		Size = UDim2.new(0, 32, 0, 32),
 		Position = UDim2.new(1, -80, 0.5, -16),
 		Parent = TopBar,
@@ -259,21 +266,22 @@ function PanelUI:CreateWindow(config)
 		Font = Theme.FontBold,
 		TextSize = 14,
 		TextColor3 = Theme.Text,
-		BackgroundColor3 = Theme.PanelAlt,
+		BackgroundColor3 = Theme.Accent,
 		Size = UDim2.new(0, 32, 0, 32),
 		Position = UDim2.new(1, -40, 0.5, -16),
 		Parent = TopBar,
 	}, { corner(8) })
 
-	hoverTint(MinimizeBtn, Theme.PanelAlt, Theme.Panel)
-	hoverTint(CloseBtn, Theme.PanelAlt, Theme.Accent)
+	hoverTint(MinimizeBtn, Theme.Accent, Theme.AccentDim)
+	hoverTint(CloseBtn, Theme.Accent, Theme.AccentDim)
 
 	-- ---------------- Sidebar ----------------
 	local Sidebar = new("Frame", {
 		Name = "Sidebar",
-		Size = UDim2.new(0, 240, 1, -56),
+		Size = UDim2.new(0, 200, 1, -56),
 		Position = UDim2.new(0, 0, 0, 56),
 		BackgroundColor3 = Theme.Sidebar,
+		BackgroundTransparency = Theme.PanelTransparency,
 		Parent = Root,
 	}, { stroke(Theme.Stroke, 1) })
 
@@ -337,9 +345,10 @@ function PanelUI:CreateWindow(config)
 	-- ---------------- Área de contenido ----------------
 	local Content = new("Frame", {
 		Name = "Content",
-		Size = UDim2.new(1, -240, 1, -56),
-		Position = UDim2.new(0, 240, 0, 56),
+		Size = UDim2.new(1, -200, 1, -56),
+		Position = UDim2.new(0, 200, 0, 56),
 		BackgroundColor3 = Theme.Background,
+		BackgroundTransparency = 1,
 		Parent = Root,
 	})
 
@@ -353,7 +362,7 @@ function PanelUI:CreateWindow(config)
 		Parent = Content,
 	}, {
 		new("UIListLayout", { Padding = UDim.new(0, 20), SortOrder = Enum.SortOrder.LayoutOrder }),
-		pad(0, 28, 32, 28, 32),
+		pad(0, 20, 20, 20, 20),
 	})
 
 	-- ============================================================
@@ -377,6 +386,50 @@ function PanelUI:CreateWindow(config)
 		Window:Destroy()
 		if Window.OnClose then Window.OnClose() end
 	end)
+
+	-- ---------------- Arrastrar la ventana (desde la barra superior) ----------------
+	local dragConnections = {}
+	do
+		local dragging = false
+		local dragStart, startPos
+
+		table.insert(dragConnections, TopBar.InputBegan:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1
+				or input.UserInputType == Enum.UserInputType.Touch then
+				dragging = true
+				dragStart = input.Position
+				startPos = Root.Position
+
+				input.Changed:Connect(function()
+					if input.UserInputState == Enum.UserInputState.End then
+						dragging = false
+					end
+				end)
+			end
+		end))
+
+		table.insert(dragConnections, UserInputService.InputChanged:Connect(function(input)
+			if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+				or input.UserInputType == Enum.UserInputType.Touch) then
+				local delta = input.Position - dragStart
+				Root.Position = UDim2.new(
+					startPos.X.Scale, startPos.X.Offset + delta.X,
+					startPos.Y.Scale, startPos.Y.Offset + delta.Y
+				)
+			end
+		end))
+	end
+
+	-- ---------------- Atajo de teclado para esconder/mostrar (por defecto: K) ----------------
+	local toggleKey = config.ToggleKey or Enum.KeyCode.K
+	local toggleConnection = UserInputService.InputBegan:Connect(function(input, gameProcessed)
+		if gameProcessed then return end
+		if input.KeyCode == toggleKey then
+			Window:Toggle()
+		end
+	end)
+	table.insert(dragConnections, toggleConnection)
+	Window._connections = dragConnections
 
 	table.insert(PanelUI.Windows, Window)
 	return Window
@@ -403,6 +456,11 @@ end
 
 -- Destruye la ventana y limpia sus referencias
 function PanelUI:Destroy()
+	if self._connections then
+		for _, conn in ipairs(self._connections) do
+			conn:Disconnect()
+		end
+	end
 	if self.ScreenGui then
 		self.ScreenGui:Destroy()
 	end
@@ -631,7 +689,7 @@ function PanelUI:CreateStatRow()
 	}, {
 		new("UIListLayout", {
 			FillDirection = Enum.FillDirection.Horizontal,
-			Padding = UDim.new(0, 40),
+			Padding = UDim.new(0, 16),
 			SortOrder = Enum.SortOrder.LayoutOrder,
 		}),
 	})
@@ -647,7 +705,7 @@ function PanelUI:CreateStat(config)
 	local container = self.Row or self.Page
 
 	local Stat = new("Frame", {
-		Size = UDim2.new(0, 150, 1, 0),
+		Size = UDim2.new(0, 108, 1, 0),
 		BackgroundTransparency = 1,
 		LayoutOrder = self._count or 0,
 		Parent = container,
@@ -707,6 +765,7 @@ function PanelUI:CreateQuickAccess(config)
 	local Card = new("Frame", {
 		Size = UDim2.new(1, 0, 0, 84),
 		BackgroundColor3 = Theme.Panel,
+		BackgroundTransparency = Theme.PanelTransparency,
 		LayoutOrder = self._rowCount,
 		Parent = self.Page,
 	}, { corner(12), stroke(Theme.Stroke, 1), pad(16) })
@@ -784,6 +843,7 @@ function PanelUI:CreateToggle(config)
 	local Row = new("Frame", {
 		Size = UDim2.new(1, 0, 0, 44),
 		BackgroundColor3 = Theme.Panel,
+		BackgroundTransparency = Theme.PanelTransparency,
 		LayoutOrder = self._rowCount,
 		Parent = self.Page,
 	}, { corner(10), stroke(Theme.Stroke, 1), pad(0, 0, 16, 0, 16) })
