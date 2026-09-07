@@ -33,14 +33,21 @@
 	   Cada Window guarda todas sus RBXScriptConnections en _connections y
 	   las desconecta en :Destroy(), evitando fugas de memoria.
 
-	6. HILOS RASTREADOS + :Stop()
+	6. HILOS ILIMITADOS, RASTREADOS + :Stop()
 	   Cada vez que un controlador (Toggle, Slider, Dropdown, Keybind,
-	   Button, QuickAccess) dispara su Callback, se guarda el hilo devuelto
-	   por task.spawn en controlador._thread. Cualquier script externo puede
-	   llamar a controlador:Stop() para cortar de una un loop que haya
-	   quedado corriendo (por ejemplo, si el comprador de la librería usa
-	   una lógica de combate propia que no revisa el flag por sí sola).
-	   Esto es genérico: no depende de qué juego ni de qué lógica sea.
+	   Button, QuickAccess) dispara su Callback, el hilo que crea
+	   task.spawn se agrega a un CONJUNTO propio del controlador
+	   (controlador._threads), en vez de guardarse en una sola variable.
+	   Esto significa que no hay límite: podés disparar el mismo
+	   controlador varias veces seguidas, o varios controladores distintos
+	   a la vez, y CADA lógica corre en su propio hilo independiente sin
+	   pisar ni perder de vista a las anteriores. Cualquier script externo
+	   puede llamar a controlador:Stop() para cortar de una TODOS los
+	   loops que hayan quedado corriendo para ese controlador (por
+	   ejemplo, si el comprador de la librería usa una lógica de combate
+	   propia que no revisa el flag por sí sola). Esto es genérico: no
+	   depende de qué juego ni de qué lógica sea, ni de cuántas se estén
+	   ejecutando a la vez.
 
 	Uso básico:
 
@@ -194,36 +201,62 @@ local function accentGradient(rotation)
 end
 
 -- ============================================================
--- 	NÚCLEO: INVOCACIÓN ASÍNCRONA SEGURA
+-- 	NÚCLEO: INVOCACIÓN ASÍNCRONA SEGURA (CONCURRENCIA ILIMITADA)
 -- ============================================================
 -- Cada callback conectado por el usuario corre en su PROPIO hilo
 -- (task.spawn) y está protegido con pcall. Un `while true do` dentro de un
--- callback jamás congela la UI ni el juego. Devuelve el hilo creado para
--- que el controlador que lo llamó pueda guardarlo y ofrecer :Stop().
-local function safeCall(fn, ...)
+-- callback jamás congela la UI ni el juego.
+--
+-- A diferencia de guardar un único "_thread", cada controlador guarda un
+-- CONJUNTO (controller._threads[hilo] = true). Esto significa que:
+--   • Podés disparar el mismo controlador varias veces seguidas (o varios
+--     controladores distintos a la vez) y CADA llamada corre en su propio
+--     hilo independiente, sin pisar ni perder la referencia a las
+--     anteriores. No hay límite: la cantidad de lógicas corriendo a la
+--     vez es tan grande como la memoria lo permita.
+--   • :Stop() sigue funcionando igual de simple, pero ahora corta TODOS
+--     los hilos activos de ese controlador, no solo el último.
+--   • Cuando un hilo termina solo (el callback ya devolvió), se borra
+--     solo de la lista.
+local function safeCall(controller, fn, ...)
 	fn = fn or function() end
 	if typeof(fn) ~= "function" then return nil end
 
 	local args = table.pack(...)
+
 	local thread = task.spawn(function()
+		local self = coroutine.running()
+
 		local ok, err = pcall(function()
 			fn(table.unpack(args, 1, args.n))
 		end)
 		if not ok then
 			warn("[SugarUI] Error en callback conectado por el usuario: " .. tostring(err))
 		end
+
+		if controller and controller._threads then
+			controller._threads[self] = nil
+		end
 	end)
+
+	if controller then
+		controller._threads = controller._threads or {}
+		controller._threads[thread] = true
+	end
+
 	return thread
 end
 
--- Corta a la fuerza el hilo activo de un controlador, sin importar qué
--- lógica tenga adentro (loop propio, espera de otro servicio, etc.).
--- Es genérico: no depende del juego ni de la lógica conectada.
+-- Corta a la fuerza TODOS los hilos activos de un controlador, sin
+-- importar cuántos haya ni qué lógica tengan adentro (loop propio, espera
+-- de otro servicio, etc.). Es genérico: no depende del juego ni de la
+-- lógica conectada.
 local function stopThread(controller)
-	if controller._thread then
-		pcall(task.cancel, controller._thread)
-		controller._thread = nil
+	if not controller._threads then return end
+	for thread in pairs(controller._threads) do
+		pcall(task.cancel, thread)
 	end
+	table.clear(controller._threads)
 end
 
 -- ============================================================
@@ -371,13 +404,24 @@ function SugarUI:CreateWindow(config)
 			Font = Theme.FontBold,
 			TextSize = 11,
 			TextColor3 = Theme.Text,
+			TextXAlignment = Enum.TextXAlignment.Center,
+			TextYAlignment = Enum.TextYAlignment.Center,
+			TextTruncate = Enum.TextTruncate.AtEnd,
 			BackgroundColor3 = Theme.Accent,
 			ClipsDescendants = true,
 			AutomaticSize = Enum.AutomaticSize.X,
 			Size = UDim2.new(0, 0, 0, 22),
 			LayoutOrder = 2,
 			Parent = TopBarLeft,
-		}, { corner(11), accentGradient(), pad(0, 0, 10, 0, 10) })
+		}, {
+			corner(11),
+			accentGradient(),
+			pad(0, 0, 10, 0, 10),
+			-- Tope de ancho: por más largo que sea el texto (ej. "by
+			-- azucarfake00"), la píldora nunca crece más allá de esto ni
+			-- empuja el resto de la barra — el texto se recorta con "…".
+			new("UISizeConstraint", { MaxSize = Vector2.new(150, 22) }),
+		})
 	end
 
 	local ServerPill = new("Frame", {
@@ -704,11 +748,11 @@ function SugarUI:CreateWindow(config)
 
 	track(MinimizeBtn.MouseButton1Click:Connect(function()
 		Window:Hide()
-		safeCall(Window.OnMinimize)
+		safeCall(nil, Window.OnMinimize)
 	end))
 	track(CloseBtn.MouseButton1Click:Connect(function()
 		Window:Hide()
-		safeCall(Window.OnClose)
+		safeCall(nil, Window.OnClose)
 	end))
 
 	-- ---------------- Arrastrar la ventana ----------------
@@ -938,7 +982,7 @@ function SugarUI:CreateTab(config)
 		Page.Visible = true
 		TabButton.BackgroundColor3 = Theme.Accent
 		Indicator.BackgroundTransparency = 0.15
-		safeCall(Tab.OnSelect)
+		safeCall(nil, Tab.OnSelect)
 	end))
 
 	table.insert(self._tabs, Tab)
@@ -1141,16 +1185,18 @@ function SugarUI:CreateQuickAccess(config)
 		Parent = Card,
 	})
 
-	local QuickAccess = setmetatable({ Card = Card, Callback = callback, _thread = nil }, SugarUI)
+	local QuickAccess = setmetatable({ Card = Card, Callback = callback, _threads = {} }, SugarUI)
 
 	-- :Set() dispara la lógica conectada como si se hubiera hecho click.
-	-- Cualquier lógica del comprador (de cualquier juego) corre en su
-	-- propio hilo, protegida con pcall.
+	-- Cada llamada corre en su propio hilo, independiente de las demás
+	-- (podés clickear varias veces seguidas y todas corren a la vez),
+	-- protegida con pcall.
 	function QuickAccess:Set(...)
-		self._thread = safeCall(self.Callback, ...)
+		safeCall(self, self.Callback, ...)
 	end
 
-	-- Corta el hilo activo del callback, sin importar qué lógica tenga.
+	-- Corta TODOS los hilos activos disparados por este acceso rápido,
+	-- sin importar cuántos haya ni qué lógica tengan.
 	function QuickAccess:Stop()
 		stopThread(self)
 	end
@@ -1187,12 +1233,16 @@ function SugarUI:CreateButton(config)
 	hoverTint(Btn, Theme.Accent, Theme.AccentDim)
 	pressFeedback(Btn)
 
-	local Button = setmetatable({ Instance = Btn, Callback = callback, _thread = nil }, SugarUI)
+	local Button = setmetatable({ Instance = Btn, Callback = callback, _threads = {} }, SugarUI)
 
+	-- Cada click dispara su propio hilo independiente: clickear varias
+	-- veces seguidas hace correr varias instancias de la lógica a la vez,
+	-- sin límite.
 	function Button:Set(...)
-		self._thread = safeCall(self.Callback, ...)
+		safeCall(self, self.Callback, ...)
 	end
 
+	-- Corta TODOS los hilos activos de este botón.
 	function Button:Stop()
 		stopThread(self)
 	end
@@ -1249,7 +1299,7 @@ function SugarUI:CreateToggle(config)
 
 	local ClickOverlay = new("TextButton", { Text = "", BackgroundTransparency = 1, Size = UDim2.new(1,0,1,0), Parent = Row })
 
-	local Toggle = setmetatable({ Track = Track, Knob = Knob, Value = state, Callback = callback, _thread = nil }, SugarUI)
+	local Toggle = setmetatable({ Track = Track, Knob = Knob, Value = state, Callback = callback, _threads = {} }, SugarUI)
 
 	local function paint(newState)
 		TweenService:Create(Track, TweenInfo.new(0.15), { BackgroundColor3 = newState and Theme.Accent or Theme.PanelAlt }):Play()
@@ -1264,11 +1314,11 @@ function SugarUI:CreateToggle(config)
 		self.Value = newState
 		paint(newState)
 		SugarUI.FlagValues[config.Flag] = newState
-		self._thread = safeCall(self.Callback, newState)
+		safeCall(self, self.Callback, newState)
 	end
 
-	-- Corta a la fuerza el hilo del callback activo (ej: si el loop de
-	-- lógica externa no revisa el flag por sí solo).
+	-- Corta a la fuerza TODOS los hilos activos del callback (ej: si un
+	-- loop de lógica externa no revisa el flag por sí solo).
 	function Toggle:Stop()
 		stopThread(self)
 	end
@@ -1347,7 +1397,7 @@ function SugarUI:CreateSlider(config)
 		Parent = Track,
 	}, { corner(7) })
 
-	local Slider = setmetatable({ Track = Track, Fill = Fill, Knob = Knob, Value = value, Callback = callback, _thread = nil }, SugarUI)
+	local Slider = setmetatable({ Track = Track, Fill = Fill, Knob = Knob, Value = value, Callback = callback, _threads = {} }, SugarUI)
 
 	local function paint(v)
 		local r = ratio(v)
@@ -1363,9 +1413,10 @@ function SugarUI:CreateSlider(config)
 		self.Value = newValue
 		paint(newValue)
 		SugarUI.FlagValues[config.Flag] = newValue
-		self._thread = safeCall(self.Callback, newValue)
+		safeCall(self, self.Callback, newValue)
 	end
 
+	-- Corta TODOS los hilos activos disparados por este slider.
 	function Slider:Stop()
 		stopThread(self)
 	end
@@ -1480,17 +1531,19 @@ function SugarUI:CreateDropdown(config)
 		new("UIListLayout", { Padding = UDim.new(0, 2), SortOrder = Enum.SortOrder.LayoutOrder }),
 	})
 
-	local Dropdown = setmetatable({ Value = selected, Callback = callback, Options = options, _thread = nil }, SugarUI)
+	local Dropdown = setmetatable({ Value = selected, Callback = callback, Options = options, _threads = {} }, SugarUI)
 
-	-- :Set(opción) cambia la selección Y dispara el callback — útil para
-	-- sincronizar el dropdown con un estado externo (ej: modo de combate).
+	-- :Set(opción) cambia la selección Y dispara el callback en su propio
+	-- hilo — útil para sincronizar el dropdown con un estado externo (ej:
+	-- modo de combate).
 	function Dropdown:Set(option)
 		self.Value = option
 		SelectedLabel.Text = tostring(option)
 		SugarUI.FlagValues[config.Flag] = option
-		self._thread = safeCall(self.Callback, option)
+		safeCall(self, self.Callback, option)
 	end
 
+	-- Corta TODOS los hilos activos disparados por este dropdown.
 	function Dropdown:Stop()
 		stopThread(self)
 	end
@@ -1563,7 +1616,7 @@ function SugarUI:CreateKeybind(config)
 		Parent = Row,
 	}, { corner(8), stroke(Theme.Stroke, 1) })
 
-	local Keybind = setmetatable({ Value = currentKey, Callback = callback, _thread = nil }, SugarUI)
+	local Keybind = setmetatable({ Value = currentKey, Callback = callback, _threads = {} }, SugarUI)
 
 	-- :Set(KeyCode) reasigna la tecla programáticamente (ej: cargar un
 	-- perfil de teclas guardado).
@@ -1573,6 +1626,7 @@ function SugarUI:CreateKeybind(config)
 		SugarUI.FlagValues[config.Flag] = keyCode
 	end
 
+	-- Corta TODOS los hilos activos disparados por esta tecla.
 	function Keybind:Stop()
 		stopThread(self)
 	end
@@ -1589,10 +1643,11 @@ function SugarUI:CreateKeybind(config)
 			return
 		end
 		if not listening and not gameProcessed and input.KeyCode == Keybind.Value then
-			-- La tecla asignada se presionó: dispara la lógica externa
-			-- (ej: activar/desactivar un Auto-M1) sin congelar nada, sin
-			-- importar de qué juego sea esa lógica.
-			Keybind._thread = safeCall(Keybind.Callback, Keybind.Value)
+			-- La tecla asignada se presionó: dispara la lógica externa en
+			-- un hilo nuevo e independiente (ej: activar/desactivar un
+			-- Auto-M1) sin congelar nada, sin importar de qué juego sea
+			-- esa lógica, y sin pisar otros hilos que ya estén corriendo.
+			safeCall(Keybind, Keybind.Callback, Keybind.Value)
 		end
 	end))
 
