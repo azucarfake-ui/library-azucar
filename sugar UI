@@ -228,6 +228,63 @@ local function stopThread(controller)
 	end
 end
 
+-- ============================================================
+-- 	ADAPTADOR DE LÓGICA EXTERNA — para conectar CUALQUIER lógica
+-- 	(de cualquier juego) sin tener que escribir un Callback
+-- 	envoltorio a mano cada vez.
+-- ============================================================
+-- Cada componente (Toggle, Slider, Button, etc.) sigue aceptando
+-- `Callback = function(valor) ... end` exactamente como antes.
+--
+-- Pero ahora TAMBIÉN podés pasar `Logic = TuTabla` directamente, y la
+-- librería sola busca cómo dispararla, probando en este orden:
+--   1) Si el valor es true/false: TuTabla:Enable() / TuTabla:Disable()
+--   2) TuTabla:Toggle(valor)
+--   3) TuTabla:Set(valor)
+--   4) TuTabla:Run(valor)
+--   5) Si Logic es directamente una función, se llama tal cual.
+-- No hace falta que tu módulo sepa nada de SugarUI: solo necesita tener
+-- UNO de esos métodos, con el nombre que ya uses habitualmente.
+local function resolveCallback(config)
+	if typeof(config.Callback) == "function" then
+		return config.Callback
+	end
+
+	local logic = config.Logic
+	if logic == nil then
+		return function() end
+	end
+
+	if typeof(logic) == "function" then
+		return logic
+	end
+
+	if typeof(logic) == "table" then
+		return function(value)
+			if typeof(value) == "boolean" then
+				if value and typeof(logic.Enable) == "function" then
+					logic.Enable()
+					return
+				elseif not value and typeof(logic.Disable) == "function" then
+					logic.Disable()
+					return
+				end
+			end
+			if typeof(logic.Toggle) == "function" then
+				logic.Toggle(value)
+			elseif typeof(logic.Set) == "function" then
+				logic.Set(value)
+			elseif typeof(logic.Run) == "function" then
+				logic.Run(value)
+			else
+				warn("[SugarUI] Logic conectada no tiene :Toggle/:Enable+Disable/:Set/:Run — revisá el nombre del método.")
+			end
+		end
+	end
+
+	return function() end
+end
+
 local function registerFlag(flagName, controller, initialValue)
 	if not flagName then return end
 	SugarUI.Flags[flagName] = controller
@@ -391,6 +448,7 @@ function SugarUI:CreateWindow(config)
 		PlaceholderColor3 = Theme.TextFaint,
 		TextXAlignment = Enum.TextXAlignment.Left,
 		ClearTextOnFocus = false,
+		ClipsDescendants = true,
 		BackgroundColor3 = Theme.PanelAlt,
 		Size = UDim2.new(1, -32, 0, 36),
 		Position = UDim2.new(0, 16, 0, 16),
@@ -441,8 +499,9 @@ function SugarUI:CreateWindow(config)
 	local ContentScroll = new("ScrollingFrame", {
 		Size = UDim2.new(1, 0, 1, 0),
 		BackgroundTransparency = 1,
-		ScrollBarThickness = 3,
-		ScrollBarImageColor3 = Theme.Stroke,
+		ScrollBarThickness = 6,
+		ScrollBarImageColor3 = Theme.Accent,
+		VerticalScrollBarInset = Enum.ScrollBarInset.ScrollBar,
 		CanvasSize = UDim2.new(0, 0, 0, 0),
 		AutomaticCanvasSize = Enum.AutomaticSize.Y,
 		Parent = Content,
@@ -452,25 +511,116 @@ function SugarUI:CreateWindow(config)
 	})
 
 	-- ---------------- Burbuja flotante ----------------
+	-- Píldora ancha (rectángulo con las puntas totalmente redondeadas) con,
+	-- en orden: "AZC" / ícono de paleta (dulce) / símbolo de mira (4
+	-- esquinas, como el ícono de referencia). Se arma sola con
+	-- AutomaticSize según el contenido, sin usar ninguna imagen externa.
+	local BUBBLE_H = 44
+
 	local Bubble = new("TextButton", {
 		Name = "Bubble",
 		Text = "",
 		AutoButtonColor = false,
-		Size = UDim2.new(0, 50, 0, 50),
-		Position = UDim2.new(1, -80, 1, -80),
+		AutomaticSize = Enum.AutomaticSize.X,
+		Size = UDim2.new(0, 0, 0, BUBBLE_H),
+		AnchorPoint = Vector2.new(1, 1),
+		Position = UDim2.new(1, -20, 1, -20),
 		BackgroundColor3 = Theme.Accent,
 		Visible = false,
 		Parent = ScreenGui,
-	}, { corner(25), stroke(Theme.Stroke, 1), accentGradient(135) })
+	}, {
+		corner(BUBBLE_H // 2),
+		stroke(Theme.Stroke, 1),
+		accentGradient(135),
+		pad(0, 0, 16, 0, 16),
+		new("UIListLayout", {
+			FillDirection = Enum.FillDirection.Horizontal,
+			VerticalAlignment = Enum.VerticalAlignment.Center,
+			Padding = UDim.new(0, 8),
+			SortOrder = Enum.SortOrder.LayoutOrder,
+		}),
+	})
+
+	-- Símbolo de mira/foco: 4 esquinas sueltas formando un cuadrado,
+	-- igual de espíritu al ícono de referencia que mandaste.
+	local function buildReticle(parent, size, color, layoutOrder)
+		local box = new("Frame", {
+			Size = UDim2.new(0, size, 0, size),
+			BackgroundTransparency = 1,
+			LayoutOrder = layoutOrder,
+			Parent = parent,
+		})
+		local thickness = 2
+		local armLen = math.floor(size * 0.42)
+		local specs = {
+			{ armLen, thickness, 0, 0 },                             { thickness, armLen, 0, 0 },
+			{ armLen, thickness, size - armLen, 0 },                 { thickness, armLen, size - thickness, 0 },
+			{ armLen, thickness, 0, size - thickness },              { thickness, armLen, 0, size - armLen },
+			{ armLen, thickness, size - armLen, size - thickness },  { thickness, armLen, size - thickness, size - armLen },
+		}
+		for _, s in ipairs(specs) do
+			new("Frame", {
+				Size = UDim2.new(0, s[1], 0, s[2]),
+				Position = UDim2.new(0, s[3], 0, s[4]),
+				BackgroundColor3 = color,
+				BorderSizePixel = 0,
+				Parent = box,
+			})
+		end
+		return box
+	end
+
+	-- Paleta (dulce): cabeza redonda con gradiente + palito.
+	local function buildLollipop(parent, size, layoutOrder)
+		local box = new("Frame", {
+			Size = UDim2.new(0, size, 0, size + 10),
+			BackgroundTransparency = 1,
+			LayoutOrder = layoutOrder,
+			Parent = parent,
+		})
+		new("Frame", {
+			Size = UDim2.new(0, size, 0, size),
+			BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+			Parent = box,
+		}, { corner(size / 2), accentGradient(45), stroke(Theme.Stroke, 1) })
+		new("Frame", {
+			Size = UDim2.new(0, 2, 0, 10),
+			Position = UDim2.new(0.5, -1, 0, size - 2),
+			BackgroundColor3 = Theme.TextFaint,
+			Parent = box,
+		}, { corner(1) })
+		return box
+	end
+
+	local function bubbleSlash(layoutOrder)
+		new("TextLabel", {
+			Text = "/",
+			Font = Theme.FontSemibold,
+			TextSize = 15,
+			TextColor3 = Theme.TextDim,
+			BackgroundTransparency = 1,
+			AutomaticSize = Enum.AutomaticSize.X,
+			Size = UDim2.new(0, 0, 1, 0),
+			LayoutOrder = layoutOrder,
+			Parent = Bubble,
+		})
+	end
 
 	new("TextLabel", {
-		Text = "🍬",
+		Text = "AZC",
 		Font = Theme.FontBold,
-		TextSize = 22,
+		TextSize = 15,
+		TextColor3 = Theme.Text,
 		BackgroundTransparency = 1,
-		Size = UDim2.new(1, 0, 1, 0),
+		AutomaticSize = Enum.AutomaticSize.X,
+		Size = UDim2.new(0, 0, 1, 0),
+		LayoutOrder = 1,
 		Parent = Bubble,
 	})
+	bubbleSlash(2)
+	buildLollipop(Bubble, 18, 3)
+	bubbleSlash(4)
+	buildReticle(Bubble, 20, Theme.Text, 5)
 
 	hoverTint(Bubble, Theme.Accent, Theme.AccentDim)
 
@@ -532,8 +682,8 @@ function SugarUI:CreateWindow(config)
 		safeCall(Window.OnMinimize)
 	end))
 	track(CloseBtn.MouseButton1Click:Connect(function()
-		Window:Hide()
 		safeCall(Window.OnClose)
+		Window:Destroy()
 	end))
 
 	-- ---------------- Arrastrar la ventana ----------------
@@ -914,7 +1064,7 @@ end
 -- ============================================================
 function SugarUI:CreateQuickAccess(config)
 	config = config or {}
-	local callback = config.Callback or function() end
+	local callback = resolveCallback(config)
 
 	local Card = new("Frame", {
 		Size = UDim2.new(1, 0, 0, 84),
@@ -982,7 +1132,7 @@ end
 -- ============================================================
 function SugarUI:CreateButton(config)
 	config = config or {}
-	local callback = config.Callback or function() end
+	local callback = resolveCallback(config)
 
 	local Btn = new("TextButton", {
 		Text = config.Text or "Botón",
@@ -1023,7 +1173,7 @@ end
 -- ============================================================
 function SugarUI:CreateToggle(config)
 	config = config or {}
-	local callback = config.Callback or function() end
+	local callback = resolveCallback(config)
 	local state = config.Default or false
 
 	local Row = new("Frame", {
@@ -1099,7 +1249,7 @@ end
 -- ============================================================
 function SugarUI:CreateSlider(config)
 	config = config or {}
-	local callback = config.Callback or function() end
+	local callback = resolveCallback(config)
 	local min = config.Min or 0
 	local max = config.Max or 100
 	local value = math.clamp(config.Default or min, min, max)
@@ -1242,7 +1392,7 @@ end
 -- ============================================================
 function SugarUI:CreateDropdown(config)
 	config = config or {}
-	local callback = config.Callback or function() end
+	local callback = resolveCallback(config)
 	local options = config.Options or {}
 	local selected = config.Default or options[1]
 
@@ -1340,7 +1490,7 @@ end
 -- ============================================================
 function SugarUI:CreateKeybind(config)
 	config = config or {}
-	local callback = config.Callback or function() end
+	local callback = resolveCallback(config)
 	local currentKey = config.Default or Enum.KeyCode.RightShift
 	local listening = false
 
